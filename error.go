@@ -14,6 +14,23 @@ import (
 	"github.com/go-playground/validator/v10"
 )
 
+type HTTPError struct {
+	StatusCode int
+	Message    string
+}
+
+func (err *HTTPError) Error() string {
+	return err.Message
+}
+
+func AuthorizationError() error {
+	return &HTTPError{http.StatusUnauthorized, "authorization failed"}
+}
+
+func NotFoundError(resource string) error {
+	return &HTTPError{http.StatusNotFound, "can not find the " + resource}
+}
+
 func (app *App) InitValidTrans() {
 	app.validTrans, _ = ut.New(en.New()).GetTranslator("en")
 
@@ -66,6 +83,8 @@ func (app *App) HandleError(c *gin.Context, err error) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"message": strings.Join(messages, "\n")})
 	} else if v, ok := err.(*json.UnmarshalTypeError); ok {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("type error on field '%s'", v.Field)})
+	} else if v, ok := err.(*HTTPError); ok {
+		c.AbortWithStatusJSON(v.StatusCode, gin.H{"message": err.Error()})
 	} else {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 	}

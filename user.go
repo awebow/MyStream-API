@@ -35,7 +35,7 @@ func (app *App) GetMe(c *gin.Context) {
 		rows.StructScan(&user)
 		c.JSON(http.StatusOK, user)
 	} else {
-		c.AbortWithStatus(http.StatusUnauthorized)
+		app.HandleError(c, AuthorizationError())
 	}
 }
 
@@ -88,7 +88,7 @@ func (app *App) PostUser(c *gin.Context) {
 
 	if err != nil {
 		if v, ok := err.(*mysql.MySQLError); ok && v.Number == 1062 {
-			c.AbortWithStatusJSON(http.StatusConflict, gin.H{"message": "the e-mail is already registered"})
+			app.HandleError(c, &HTTPError{http.StatusConflict, "the e-mail is already registered"})
 		} else {
 			app.HandleError(c, err)
 		}
@@ -152,7 +152,7 @@ func (app *App) PostToken(c *gin.Context) {
 
 		c.JSON(http.StatusOK, gin.H{"token": string(signed)})
 	} else {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"message": "wrong e-mail or password"})
+		app.HandleError(c, AuthorizationError())
 	}
 }
 
@@ -171,7 +171,7 @@ func (app *App) AuthMiddleware() gin.HandlerFunc {
 			}
 		}
 
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"message": "authorization failed"})
+		app.HandleError(c, AuthorizationError())
 	}
 }
 

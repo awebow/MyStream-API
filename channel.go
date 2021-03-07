@@ -35,7 +35,7 @@ func (app *App) GetChannelById(c *gin.Context) {
 
 		c.JSON(http.StatusOK, channel)
 	} else {
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"message": "can not find the channel"})
+		app.HandleError(c, NotFoundError("channel"))
 	}
 }
 

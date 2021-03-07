@@ -15,9 +15,46 @@ import (
 )
 
 type User struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
-	Name  string `json:"name"`
+	ID            string     `json:"id" db:"id"`
+	Email         string     `json:"email" db:"email"`
+	Name          string     `json:"name" db:"name"`
+	RegisterdAt   time.Time  `json:"registered_at" db:"registered_at"`
+	DeactivatedAt *time.Time `json:"deactivated_at" db:"deactivated_at"`
+}
+
+func (app *App) GetMe(c *gin.Context) {
+	sql := "SELECT `id`, `email`, `name`, `registered_at`, `deactivated_at` FROM users WHERE `id`=?"
+	rows, err := app.db.Queryx(sql, c.GetString("UserID"))
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+
+	if rows.Next() {
+		user := User{}
+		rows.StructScan(&user)
+		c.JSON(http.StatusOK, user)
+	} else {
+		c.AbortWithStatus(http.StatusUnauthorized)
+	}
+}
+
+func (app *App) GetMyChannels(c *gin.Context) {
+	sql := "SELECT `id`, `name`, `description`, `created_at`, `deactivated_at` FROM channels WHERE `owner`=?"
+	rows, err := app.db.Queryx(sql, c.GetString("UserID"))
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+
+	channels := []Channel{}
+	for rows.Next() {
+		channel := Channel{}
+		rows.StructScan(&channel)
+		channels = append(channels, channel)
+	}
+
+	c.JSON(http.StatusOK, channels)
 }
 
 func (app *App) PostUsers(c *gin.Context) {

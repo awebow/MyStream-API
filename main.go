@@ -23,6 +23,15 @@ func main() {
 	})
 	router.POST("/users", app.PostUsers)
 	router.POST("/users/tokens", app.PostTokens)
+	router.GET("/channels/:id", app.GetChannelById)
+
+	authorized := router.Group("/", app.AuthMiddleware())
+	authorized.POST("/channels", app.PostChannels)
+
+	me := authorized.Group("users/me")
+	me.GET("", app.GetMe)
+	me.GET("/channels", app.GetMyChannels)
+
 	router.Run(app.Config.Listen...)
 }
 

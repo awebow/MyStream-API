@@ -57,7 +57,7 @@ func (app *App) GetMyChannels(c *gin.Context) {
 	c.JSON(http.StatusOK, channels)
 }
 
-func (app *App) PostUsers(c *gin.Context) {
+func (app *App) PostUser(c *gin.Context) {
 	body := struct {
 		Email    string `json:"email" binding:"email,required,max=255"`
 		Password string `json:"password" binding:"required,min=8,max=255"`
@@ -120,7 +120,7 @@ func (app *App) PostUsers(c *gin.Context) {
 	}
 }
 
-func (app *App) PostTokens(c *gin.Context) {
+func (app *App) PostToken(c *gin.Context) {
 	body := struct {
 		Email    string `json:"email" binding:"required"`
 		Password string `json:"password" binding:"required`

@@ -39,7 +39,7 @@ func (app *App) GetChannelById(c *gin.Context) {
 	}
 }
 
-func (app *App) PostChannels(c *gin.Context) {
+func (app *App) PostChannel(c *gin.Context) {
 	body := struct {
 		Name        string `json:"name" binding:"required,max=100"`
 		Description string `json:"description"`

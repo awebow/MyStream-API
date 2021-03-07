@@ -21,12 +21,12 @@ func main() {
 	router.GET("/", func(c *gin.Context) {
 		c.String(http.StatusOK, "Hello, World!")
 	})
-	router.POST("/users", app.PostUsers)
-	router.POST("/users/tokens", app.PostTokens)
+	router.POST("/users", app.PostUser)
+	router.POST("/users/tokens", app.PostToken)
 	router.GET("/channels/:id", app.GetChannelById)
 
 	authorized := router.Group("/", app.AuthMiddleware())
-	authorized.POST("/channels", app.PostChannels)
+	authorized.POST("/channels", app.PostChannel)
 
 	me := authorized.Group("users/me")
 	me.GET("", app.GetMe)

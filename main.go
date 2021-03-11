@@ -18,15 +18,33 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 
 	router := gin.Default()
+	router.Use(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "*")
+		c.Header("Access-Control-Allow-Headers", "*")
+
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		c.Next()
+	})
+
 	router.GET("/", func(c *gin.Context) {
 		c.String(http.StatusOK, "Hello, World!")
 	})
 	router.POST("/users", app.PostUser)
 	router.POST("/users/tokens", app.PostToken)
 	router.GET("/channels/:id", app.GetChannelById)
+	router.GET("/channels/:id/videos", app.GetChannelVideos)
+	router.GET("/videos/:id", app.GetVideo)
+	router.PUT("/videos/:id", app.PutVideo)
 
-	authorized := router.Group("/", app.AuthMiddleware())
+	authorized := router.Group("/", app.AuthMiddleware(false))
 	authorized.POST("/channels", app.PostChannel)
+	authorized.POST("/videos", app.PostVideo)
+	authorized.PUT("/videos/:id/thumbnail", app.PutThumbnail)
 
 	me := authorized.Group("users/me")
 	me.GET("", app.GetMe)
@@ -44,8 +62,15 @@ type App struct {
 			Password string `json:"password"`
 			Name     string `json:"name"`
 		} `json:"database"`
-		AuthSignKey       string `json:"auth_sign_key"`
-		ULIDConflictRetry int    `json:"ulid_conflict_retry"`
+		AuthSignKey       string   `json:"auth_sign_key"`
+		UploadSignKey     string   `json:"upload_sign_key"`
+		ULIDConflictRetry int      `json:"ulid_conflict_retry"`
+		StoreCommand      []string `json:"store_cmd"`
+		Thumbnail         struct {
+			Width   int `json:"width"`
+			Height  int `json:"height"`
+			Quality int `json:"quality"`
+		} `json:"thumbnail"`
 	}
 	db         *sqlx.DB
 	validTrans ut.Translator

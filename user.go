@@ -156,14 +156,13 @@ func (app *App) PostToken(c *gin.Context) {
 	}
 }
 
-func (app *App) AuthMiddleware() gin.HandlerFunc {
+func (app *App) AuthMiddleware(allowUnauth bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		s := strings.Split(c.GetHeader("Authorization"), " ")
 		if len(s) == 2 && s[0] == "Bearer" {
 			token, err := jwt.Parse([]byte(s[1]), jwt.WithVerify(jwa.HS256, []byte(app.Config.AuthSignKey)))
 			if err == nil {
-				id, ok := token.Get("user_id")
-				if ok {
+				if id, ok := token.Get("user_id"); ok {
 					c.Set("UserID", id)
 					c.Next()
 					return
@@ -171,7 +170,11 @@ func (app *App) AuthMiddleware() gin.HandlerFunc {
 			}
 		}
 
-		app.HandleError(c, AuthorizationError())
+		if allowUnauth {
+			c.Next()
+		} else {
+			app.HandleError(c, AuthorizationError())
+		}
 	}
 }
 

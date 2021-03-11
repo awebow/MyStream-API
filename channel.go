@@ -73,3 +73,23 @@ func (app *App) PostChannel(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Unknown server error."})
 	}
 }
+
+func (app *App) GetChannelVideos(c *gin.Context) {
+	channelID := c.Param("id")
+
+	sql := "SELECT * FROM videos WHERE `channel_id`=? AND `status`='ACTIVE'"
+	rows, err := app.db.Unsafe().Queryx(sql, channelID)
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+
+	videos := []Video{}
+	for rows.Next() {
+		v := Video{}
+		err = rows.StructScan(&v)
+		videos = append(videos, v)
+	}
+
+	c.JSON(http.StatusOK, videos)
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
@@ -152,7 +153,12 @@ func (app *App) PostVideo(c *gin.Context) {
 
 	sql := "INSERT INTO videos (`id`, `channel_id`, `title`, `description`, `post_started_at`) " +
 		"VALUES (?, ?, ?, ?, ?)"
-	stmt, _ := app.db.Prepare(sql)
+	stmt, err := app.db.Prepare(sql)
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+	defer stmt.Close()
 
 	var id ulid.ULID
 	now := time.Now()
@@ -329,4 +335,133 @@ func (app *App) PutThumbnail(c *gin.Context) {
 	}
 
 	c.AbortWithStatus(http.StatusNoContent)
+}
+
+func (app *App) GetVideoComments(c *gin.Context) {
+	videoID := c.Param("id")
+
+	rows, err := app.db.Queryx("SELECT 1 FROM videos WHERE `id`=? AND `status`='ACTIVE'", videoID)
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	} else if !rows.Next() {
+		app.HandleError(c, NotFoundError("video"))
+		return
+	}
+
+	rows, err = app.db.Unsafe().Queryx("SELECT * FROM comments WHERE `video_id`=?", videoID)
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+
+	comments := []Comment{}
+	for rows.Next() {
+		comment := Comment{}
+		rows.StructScan(&comment)
+		comments = append(comments, comment)
+	}
+
+	c.JSON(http.StatusOK, comments)
+}
+
+type Comment struct {
+	ID            string     `json:"id" db:"id"`
+	VideoID       string     `json:"video_id" db:"video_id"`
+	Content       string     `json:"content" db:"content"`
+	WriterID      string     `json:"writer_id" db:"writer_id"`
+	PostedAt      time.Time  `json:"posted_at" db:"posted_at"`
+	DeactivatedAt *time.Time `json:"deactivated_at" db:"deactivated_at"`
+}
+
+func (app *App) SelectComment(id string) (c *Comment, err error) {
+	c = &Comment{}
+	rows, err := app.db.Unsafe().Queryx("SELECT * FROM comments WHERE `id`=?", id)
+	if err != nil {
+		return
+	}
+
+	if rows.Next() {
+		err = rows.StructScan(c)
+	} else {
+		err = NotFoundError("comment")
+	}
+	return
+}
+
+func (app *App) PostComment(c *gin.Context) {
+	body := struct {
+		VideoID string `json:"video_id"`
+		Content string `json:"content"`
+	}{}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		app.HandleError(c, err)
+		return
+	}
+
+	stmt, err := app.db.Prepare(
+		"INSERT INTO comments (`id`, `video_id`, `content`, `writer_id`, `posted_at`) " +
+			"SELECT ?, `id`, ?, ?, ? FROM videos WHERE `id`=? AND `status`='ACTIVE'",
+	)
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+	defer stmt.Close()
+
+	var id ulid.ULID
+	now := time.Now()
+	entropy := ulid.Monotonic(rand.New(rand.NewSource(now.UnixNano())), 0)
+	var res sql.Result
+	for i := 0; i < app.Config.ULIDConflictRetry+1; i++ {
+		id = ulid.MustNew(ulid.Timestamp(now), entropy)
+
+		res, err = stmt.Exec(id.String(), body.Content, c.GetString("UserID"), now, body.VideoID)
+
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+
+	if rows, err := res.RowsAffected(); err != nil {
+		app.HandleError(c, err)
+	} else if rows == 0 {
+		app.HandleError(c, NotFoundError("video"))
+	} else {
+		comment, _ := app.SelectComment(id.String())
+		c.JSON(http.StatusOK, comment)
+	}
+}
+
+func (app *App) DeleteComment(c *gin.Context) {
+	commentID := c.Param("id")
+	rows, err := app.db.Query("SELECT `writer_id` FROM comments WHERE `id`=?", commentID)
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+
+	if rows.Next() {
+		var writer string
+		rows.Scan(&writer)
+
+		if writer != c.GetString("UserID") {
+			app.HandleError(c, &HTTPError{http.StatusForbidden, "you don't have permission on this comment"})
+			return
+		}
+	} else {
+		app.HandleError(c, NotFoundError("comment"))
+		return
+	}
+
+	sql := "DELETE FROM comments WHERE `id`=?"
+	if _, err = app.db.Exec(sql, commentID); err == nil {
+		c.AbortWithStatus(http.StatusNoContent)
+	} else {
+		app.HandleError(c, err)
+	}
 }

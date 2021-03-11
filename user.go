@@ -98,20 +98,23 @@ func (app *App) PostUser(c *gin.Context) {
 	}
 
 	stmt, err := tx.Prepare("UPDATE users SET `id`=? WHERE `email`=?")
+	if err != nil {
+		tx.Rollback()
+		app.HandleError(c, err)
+		return
+	}
 
-	inserted := false
 	for i := 0; i < app.Config.ULIDConflictRetry+1; i++ {
 		id = ulid.MustNew(ulid.Timestamp(now), entropy)
 
 		_, err = stmt.Exec(id.String(), body.Email)
 
 		if err == nil {
-			inserted = true
 			break
 		}
 	}
 
-	if inserted {
+	if stmt.Close() == nil && err == nil {
 		tx.Commit()
 		c.JSON(http.StatusOK, gin.H{"id": id})
 	} else {

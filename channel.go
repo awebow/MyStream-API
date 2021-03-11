@@ -50,7 +50,12 @@ func (app *App) PostChannel(c *gin.Context) {
 	}
 
 	sql := "INSERT INTO channels (`id`, `name`, `description`, `owner`, `created_at`) VALUES (?, ?, ?, ?, ?)"
-	stmt, _ := app.db.Prepare(sql)
+	stmt, err := app.db.Prepare(sql)
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+	defer stmt.Close()
 
 	var id ulid.ULID
 	now := time.Now()

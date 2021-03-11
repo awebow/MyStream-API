@@ -40,11 +40,14 @@ func main() {
 	router.GET("/channels/:id/videos", app.GetChannelVideos)
 	router.GET("/videos/:id", app.GetVideo)
 	router.PUT("/videos/:id", app.PutVideo)
+	router.GET("/videos/:id/comments", app.GetVideoComments)
 
 	authorized := router.Group("/", app.AuthMiddleware(false))
 	authorized.POST("/channels", app.PostChannel)
 	authorized.POST("/videos", app.PostVideo)
 	authorized.PUT("/videos/:id/thumbnail", app.PutThumbnail)
+	authorized.POST("/comments", app.PostComment)
+	authorized.DELETE("/comments/:id", app.DeleteComment)
 
 	me := authorized.Group("users/me")
 	me.GET("", app.GetMe)

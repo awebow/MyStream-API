@@ -126,7 +126,7 @@ func (app *App) PostUser(c *gin.Context) {
 func (app *App) PostToken(c *gin.Context) {
 	body := struct {
 		Email    string `json:"email" binding:"required"`
-		Password string `json:"password" binding:"required`
+		Password string `json:"password" binding:"required"`
 	}{}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		app.HandleError(c, err)

@@ -9,11 +9,13 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/disintegration/imaging"
 	"github.com/gin-gonic/gin"
+	"github.com/jmoiron/sqlx"
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwt"
 	"github.com/oklog/ulid/v2"
@@ -119,6 +121,49 @@ func (app *App) GetVideo(c *gin.Context) {
 	} else {
 		app.HandleError(c, err)
 	}
+}
+
+func (app *App) GetVideos(c *gin.Context) {
+	id := c.Query("last_id")
+	limit := 20
+
+	var err error
+	if q := c.Query("limit"); q != "" {
+		limit, err = strconv.Atoi(q)
+		if err != nil {
+			app.HandleError(c, err)
+			return
+		}
+	}
+
+	if limit < 1 || limit > 100 {
+		app.HandleError(c, &HTTPError{http.StatusBadRequest, "value of 'limit' has to be 1~100"})
+		return
+	}
+
+	var rows *sqlx.Rows
+	if id == "" {
+		sql := "SELECT * FROM videos WHERE `status`='ACTIVE' ORDER BY `id` DESC LIMIT ?"
+		rows, err = app.db.Unsafe().Queryx(sql, limit)
+	} else {
+		sql := "SELECT * FROM videos WHERE `id` < ? AND `status`='ACTIVE' ORDER BY `id` DESC LIMIT ?"
+		rows, err = app.db.Unsafe().Queryx(sql, id, limit)
+	}
+
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+
+	videos := []Video{}
+	for rows.Next() {
+		video := Video{}
+		rows.StructScan(&video)
+
+		videos = append(videos, video)
+	}
+
+	c.JSON(http.StatusOK, videos)
 }
 
 func (app *App) PostVideo(c *gin.Context) {

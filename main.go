@@ -38,6 +38,7 @@ func main() {
 	router.POST("/users/tokens", app.PostToken)
 	router.GET("/channels/:id", app.GetChannelById)
 	router.GET("/channels/:id/videos", app.GetChannelVideos)
+	router.GET("/videos", app.GetVideos)
 	router.GET("/videos/:id", app.GetVideo)
 	router.PUT("/videos/:id", app.PutVideo)
 	router.GET("/videos/:id/comments", app.GetVideoComments)

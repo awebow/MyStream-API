@@ -1,13 +1,18 @@
 package main
 
 import (
+	"fmt"
+	"io/ioutil"
 	"math/rand"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/disintegration/imaging"
 	"github.com/gin-gonic/gin"
 	"github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwt"
 	"github.com/oklog/ulid/v2"
@@ -18,30 +23,43 @@ type User struct {
 	ID            string     `json:"id" db:"id"`
 	Email         string     `json:"email" db:"email"`
 	Name          string     `json:"name" db:"name"`
+	Picture       *string    `json:"picture" db:"picture"`
 	RegisterdAt   time.Time  `json:"registered_at" db:"registered_at"`
 	DeactivatedAt *time.Time `json:"deactivated_at" db:"deactivated_at"`
 }
 
-func (app *App) GetMe(c *gin.Context) {
-	sql := "SELECT `id`, `email`, `name`, `registered_at`, `deactivated_at` FROM users WHERE `id`=?"
-	rows, err := app.db.Queryx(sql, c.GetString("UserID"))
+func (app *App) SelectUser(id string) (u *User, err error) {
+	u = &User{}
+	var rows *sqlx.Rows
+	rows, err = app.db.Unsafe().Queryx("SELECT * FROM users WHERE `id`=?", id)
 	if err != nil {
-		app.HandleError(c, err)
 		return
 	}
 
 	if rows.Next() {
-		user := User{}
-		rows.StructScan(&user)
-		c.JSON(http.StatusOK, user)
+		err = rows.StructScan(u)
 	} else {
-		app.HandleError(c, AuthorizationError())
+		err = NotFoundError("user")
 	}
+	return
+}
+
+func (app *App) GetMe(c *gin.Context) {
+	me, err := app.SelectUser(c.GetString("UserID"))
+	if err != nil {
+		if v, ok := err.(*HTTPError); ok && v.StatusCode == http.StatusNotFound {
+			err = AuthorizationError()
+		}
+
+		app.HandleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, me)
 }
 
 func (app *App) GetMyChannels(c *gin.Context) {
-	sql := "SELECT `id`, `name`, `description`, `created_at`, `deactivated_at` FROM channels WHERE `owner`=?"
-	rows, err := app.db.Queryx(sql, c.GetString("UserID"))
+	rows, err := app.db.Unsafe().Queryx("SELECT * FROM channels WHERE `owner`=?", c.GetString("UserID"))
 	if err != nil {
 		app.HandleError(c, err)
 		return
@@ -121,6 +139,80 @@ func (app *App) PostUser(c *gin.Context) {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Unknown server error."})
 	}
+}
+
+func (app *App) PutUserPicture(c *gin.Context) {
+	userID := c.GetString("UserID")
+
+	header, err := c.FormFile("file")
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+
+	file, err := header.Open()
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+	defer file.Close()
+
+	img, err := imaging.Decode(file)
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+
+	dir, err := ioutil.TempDir("", "picture")
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+	defer os.RemoveAll(dir)
+
+	for _, o := range app.Config.UserPicture {
+		output, err := os.Create(fmt.Sprintf("%s/%dx%d.jpg", dir, o.Width, o.Height))
+		if err != nil {
+			app.HandleError(c, err)
+			return
+		}
+
+		resized := imaging.Fill(img, o.Width, o.Height, imaging.Center, imaging.Lanczos)
+		err = imaging.Encode(output, resized, imaging.JPEG, imaging.JPEGQuality(app.Config.Thumbnail.Quality))
+		if err != nil {
+			output.Close()
+			app.HandleError(c, err)
+			return
+		}
+
+		if err = output.Close(); err != nil {
+			app.HandleError(c, err)
+			return
+		}
+	}
+
+	now := time.Now()
+	entropy := ulid.Monotonic(rand.New(rand.NewSource(now.UnixNano())), 0)
+	fileName := "u" + userID + ulid.MustNew(ulid.Timestamp(now), entropy).String()
+
+	if err = app.StoreFile(dir, "images/"+fileName); err != nil {
+		app.HandleError(c, err)
+		return
+	}
+
+	_, err = app.db.Query("UPDATE users SET `picture`=? WHERE `id`=?", fileName, userID)
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+
+	me, err := app.SelectUser(userID)
+	if err != nil {
+		app.HandleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, me)
 }
 
 func (app *App) PostToken(c *gin.Context) {

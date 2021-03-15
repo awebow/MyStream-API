@@ -45,6 +45,7 @@ func main() {
 
 	authorized := router.Group("/", app.AuthMiddleware(false))
 	authorized.POST("/channels", app.PostChannel)
+	authorized.PUT("/channels/:id/picture", app.ChannelAuthParam("id"), app.PutChannelPicture)
 	authorized.POST("/videos", app.PostVideo)
 	authorized.PUT("/videos/:id/thumbnail", app.PutThumbnail)
 	authorized.POST("/comments", app.PostComment)
@@ -53,6 +54,7 @@ func main() {
 	me := authorized.Group("users/me")
 	me.GET("", app.GetMe)
 	me.GET("/channels", app.GetMyChannels)
+	me.PUT("/picture", app.PutUserPicture)
 
 	router.Run(app.Config.Listen...)
 }
@@ -66,15 +68,13 @@ type App struct {
 			Password string `json:"password"`
 			Name     string `json:"name"`
 		} `json:"database"`
-		AuthSignKey       string   `json:"auth_sign_key"`
-		UploadSignKey     string   `json:"upload_sign_key"`
-		ULIDConflictRetry int      `json:"ulid_conflict_retry"`
-		StoreCommand      []string `json:"store_cmd"`
-		Thumbnail         struct {
-			Width   int `json:"width"`
-			Height  int `json:"height"`
-			Quality int `json:"quality"`
-		} `json:"thumbnail"`
+		AuthSignKey       string        `json:"auth_sign_key"`
+		UploadSignKey     string        `json:"upload_sign_key"`
+		ULIDConflictRetry int           `json:"ulid_conflict_retry"`
+		StoreCommand      []string      `json:"store_cmd"`
+		Thumbnail         ImageOption   `json:"thumbnail"`
+		UserPicture       []ImageOption `json:"user_picture"`
+		ChannelPicture    []ImageOption `json:"channel_picture"`
 	}
 	db         *sqlx.DB
 	validTrans ut.Translator
@@ -101,4 +101,10 @@ func NewApp() *App {
 	app.db = db
 
 	return app
+}
+
+type ImageOption struct {
+	Width   int `json:"width"`
+	Height  int `json:"height"`
+	Quality int `json:"quality"`
 }

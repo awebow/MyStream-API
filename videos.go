@@ -99,7 +99,8 @@ type Video struct {
 
 func (app *App) SelectVideo(id string) (v *Video, err error) {
 	v = &Video{}
-	rows, err := app.db.Unsafe().Queryx("SELECT * FROM videos WHERE `id`=?", id)
+	var rows *sqlx.Rows
+	rows, err = app.db.Unsafe().Queryx("SELECT * FROM videos WHERE `id`=?", id)
 	if err != nil {
 		return
 	}
@@ -177,22 +178,8 @@ func (app *App) PostVideo(c *gin.Context) {
 		return
 	}
 
-	rows, err := app.db.Query("SELECT `owner` FROM channels WHERE `id`=?", body.ChannelID)
-	if err != nil {
+	if err := app.CheckChannelAuth(body.ChannelID, c.GetString("UserID")); err != nil {
 		app.HandleError(c, err)
-		return
-	}
-
-	if rows.Next() {
-		var owner string
-		rows.Scan(&owner)
-
-		if owner != c.GetString("UserID") {
-			app.HandleError(c, &HTTPError{http.StatusForbidden, "you don't have permission on this channel"})
-			return
-		}
-	} else {
-		app.HandleError(c, NotFoundError("channel"))
 		return
 	}
 
@@ -371,6 +358,7 @@ func (app *App) PutThumbnail(c *gin.Context) {
 
 	err = imaging.Encode(temp, resized, imaging.JPEG, imaging.JPEGQuality(app.Config.Thumbnail.Quality))
 	if err != nil {
+		temp.Close()
 		app.HandleError(c, err)
 		return
 	}
@@ -427,7 +415,8 @@ type Comment struct {
 
 func (app *App) SelectComment(id string) (c *Comment, err error) {
 	c = &Comment{}
-	rows, err := app.db.Unsafe().Queryx("SELECT * FROM comments WHERE `id`=?", id)
+	var rows *sqlx.Rows
+	rows, err = app.db.Unsafe().Queryx("SELECT * FROM comments WHERE `id`=?", id)
 	if err != nil {
 		return
 	}

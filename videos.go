@@ -240,6 +240,7 @@ func (app *App) PutVideo(c *gin.Context) {
 	body := struct {
 		Duration *float32     `json:"duration"`
 		Status   *VideoStatus `json:"status"`
+		PostedAt *time.Time   `json:"posted_at"`
 	}{}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		app.HandleError(c, err)
@@ -292,6 +293,11 @@ func (app *App) PutVideo(c *gin.Context) {
 		if body.Status != nil {
 			params = append(params, "`status`=?")
 			vals = append(vals, *body.Status)
+		}
+
+		if body.PostedAt != nil {
+			params = append(params, "`posted_at`=?")
+			vals = append(vals, *body.PostedAt)
 		}
 	}
 

@@ -380,7 +380,7 @@ func (app *App) PutThumbnail(c *gin.Context) {
 		return
 	}
 
-	if err = app.StoreFile(temp.Name(), videoID+"/thumbnail.jpg"); err != nil {
+	if err = app.StoreFile(temp.Name(), "videos/"+videoID+"/thumbnail.jpg"); err != nil {
 		app.HandleError(c, err)
 		return
 	}

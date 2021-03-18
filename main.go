@@ -38,6 +38,13 @@ func main() {
 	e.GET("/", func(c echo.Context) error {
 		return c.String(http.StatusOK, "Hello, World!")
 	})
+
+	e.GET("/users/:id", app.GetUser)
+	e.POST("/users", app.PostUser)
+	e.POST("/users/tokens", app.PostToken)
+	e.GET("/channels/:id", app.GetChannel)
+	e.GET("/channels/:id/videos", app.GetChannelVideos)
+	e.GET("/videos", app.GetVideos)
 	e.PUT("/videos/:id", app.PutVideo, func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			userErr := userAuth(func(echo.Context) error { return nil })(c)
@@ -50,12 +57,6 @@ func main() {
 			return next(c)
 		}
 	})
-
-	e.POST("/users", app.PostUser)
-	e.POST("/users/tokens", app.PostToken)
-	e.GET("/channels/:id", app.GetChannel)
-	e.GET("/channels/:id/videos", app.GetChannelVideos)
-	e.GET("/videos", app.GetVideos)
 	e.GET("/videos/:id", app.GetVideo)
 	e.GET("/videos/:id/comments", app.GetVideoComments)
 

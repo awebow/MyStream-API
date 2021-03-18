@@ -44,6 +44,25 @@ func (app *App) SelectUser(id string) (u *User, err error) {
 	return
 }
 
+func (app *App) GetUser(c echo.Context) error {
+	sql := "SELECT `id`, `name`, `picture` FROM users WHERE `id`=?"
+	rows, err := app.db.Queryx(sql, c.Param("id"))
+	if err != nil {
+		return err
+	}
+
+	if rows.Next() {
+		blob, err := RowToJSON(rows)
+		if err != nil {
+			return nil
+		}
+
+		return c.JSONBlob(http.StatusOK, blob)
+	} else {
+		return NotFoundError("user")
+	}
+}
+
 func (app *App) GetMe(c echo.Context) error {
 	me, err := app.SelectUser(GetUserID(c))
 	if err != nil {

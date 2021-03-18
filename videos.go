@@ -13,9 +13,10 @@ import (
 	"strings"
 	"time"
 
+	jwtgo "github.com/dgrijalva/jwt-go"
 	"github.com/disintegration/imaging"
-	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
+	"github.com/labstack/echo/v4"
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwt"
 	"github.com/oklog/ulid/v2"
@@ -113,33 +114,31 @@ func (app *App) SelectVideo(id string) (v *Video, err error) {
 	return
 }
 
-func (app *App) GetVideo(c *gin.Context) {
+func (app *App) GetVideo(c echo.Context) error {
 	videoID := c.Param("id")
 
 	video, err := app.SelectVideo(videoID)
 	if err == nil {
-		c.JSON(http.StatusOK, video)
+		return c.JSON(http.StatusOK, video)
 	} else {
-		app.HandleError(c, err)
+		return err
 	}
 }
 
-func (app *App) GetVideos(c *gin.Context) {
-	id := c.Query("last_id")
+func (app *App) GetVideos(c echo.Context) error {
+	id := c.QueryParam("last_id")
 	limit := 20
 
 	var err error
-	if q := c.Query("limit"); q != "" {
+	if q := c.QueryParam("limit"); q != "" {
 		limit, err = strconv.Atoi(q)
 		if err != nil {
-			app.HandleError(c, err)
-			return
+			return err
 		}
 	}
 
 	if limit < 1 || limit > 100 {
-		app.HandleError(c, &HTTPError{http.StatusBadRequest, "value of 'limit' has to be 1~100"})
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "value of 'limit' has to be 1~100")
 	}
 
 	var rows *sqlx.Rows
@@ -152,8 +151,7 @@ func (app *App) GetVideos(c *gin.Context) {
 	}
 
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	videos := []Video{}
@@ -164,84 +162,79 @@ func (app *App) GetVideos(c *gin.Context) {
 		videos = append(videos, video)
 	}
 
-	c.JSON(http.StatusOK, videos)
+	return c.JSON(http.StatusOK, videos)
 }
 
-func (app *App) PostVideo(c *gin.Context) {
+func (app *App) PostVideo(c echo.Context) error {
 	body := struct {
-		ChannelID   string `json:"channel_id" binding:"required"`
-		Title       string `json:"title" binding:"required"`
-		Description string `json:"description" binding:"required"`
+		ChannelID   string `json:"channel_id" validate:"required"`
+		Title       string `json:"title" validate:"required"`
+		Description string `json:"description" validate:"required"`
 	}{}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		app.HandleError(c, err)
-		return
+	if err := c.Bind(&body); err != nil {
+		return err
+	}
+	if err := c.Validate(&body); err != nil {
+		return err
 	}
 
-	if err := app.CheckChannelAuth(body.ChannelID, c.GetString("UserID")); err != nil {
-		app.HandleError(c, err)
-		return
+	if err := app.CheckChannelAuth(body.ChannelID, GetUserID(c)); err != nil {
+		return err
 	}
 
 	sql := "INSERT INTO videos (`id`, `channel_id`, `title`, `description`, `post_started_at`) " +
 		"VALUES (?, ?, ?, ?, ?)"
 	stmt, err := app.db.Prepare(sql)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 	defer stmt.Close()
 
 	var id ulid.ULID
 	now := time.Now()
 	entropy := ulid.Monotonic(rand.New(rand.NewSource(now.UnixNano())), 0)
-	inserted := false
 	for i := 0; i < app.Config.ULIDConflictRetry+1; i++ {
 		id = ulid.MustNew(ulid.Timestamp(now), entropy)
 
-		_, err := stmt.Exec(id.String(), body.ChannelID, body.Title, body.Description, now)
+		_, err = stmt.Exec(id.String(), body.ChannelID, body.Title, body.Description, now)
 
 		if err == nil {
-			inserted = true
 			break
 		}
 	}
 
-	if inserted {
+	if err == nil {
 		token := jwt.New()
 		token.Set("video_id", id)
 		signed, err := jwt.Sign(token, jwa.HS256, []byte(app.Config.UploadSignKey))
 		if err != nil {
-			app.HandleError(c, err)
-			return
+			return err
 		}
 
-		c.JSON(http.StatusOK, gin.H{"token": string(signed)})
+		return c.JSON(http.StatusOK, echo.Map{"token": string(signed)})
 	} else {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Unknown server error."})
+		return err
 	}
 }
 
-func (app *App) PutVideo(c *gin.Context) {
+func (app *App) PutVideo(c echo.Context) error {
 	videoID := c.Param("id")
 	body := struct {
 		Duration *float32     `json:"duration"`
 		Status   *VideoStatus `json:"status"`
 		PostedAt *time.Time   `json:"posted_at"`
 	}{}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		app.HandleError(c, err)
-		return
+	if err := c.Bind(&body); err != nil {
+		return err
 	}
 
 	editMeta := false
 
-	if userID := c.GetString("UserID"); userID != "" {
+	if userID := GetUserID(c); userID != "" {
 		sql := "SELECT c.`owner` FROM videos v JOIN channels c ON v.`channel_id`=c.`id` WHERE v.`id`=?"
 		rows, err := app.db.Query(sql, videoID)
 		if err != nil {
-			app.HandleError(c, AuthorizationError())
-			return
+			return echo.ErrUnauthorized
 		}
 
 		if rows.Next() {
@@ -249,23 +242,18 @@ func (app *App) PutVideo(c *gin.Context) {
 			rows.Scan(&owner)
 
 			if owner != userID {
-				app.HandleError(c, &HTTPError{http.StatusForbidden, "you don't have permission on this video"})
-				return
+				return echo.NewHTTPError(http.StatusForbidden, "you don't have permission on this video")
 			}
 		}
-	} else if s := strings.Split(c.GetHeader("Authorization"), " "); len(s) == 2 && s[0] == "Bearer" {
-		token, err := jwt.Parse([]byte(s[1]), jwt.WithVerify(jwa.HS256, []byte(app.Config.UploadSignKey)))
-		if err != nil {
-			app.HandleError(c, AuthorizationError())
-			return
+	} else if token, ok := c.Get("uploadToken").(*jwtgo.Token); ok {
+		claims := token.Claims.(jwtgo.MapClaims)
+		if id, ok := claims["video_id"].(string); !ok || id != videoID {
+			return echo.ErrUnauthorized
 		}
 
-		if id, ok := token.Get("video_id"); !ok || id != videoID {
-			app.HandleError(c, AuthorizationError())
-			return
-		}
-
-		editMeta = token.Issuer() == "encoder"
+		editMeta = claims["iss"] == "encoder"
+	} else {
+		return echo.ErrUnauthorized
 	}
 
 	params := []string{}
@@ -289,8 +277,7 @@ func (app *App) PutVideo(c *gin.Context) {
 	}
 
 	if len(params) == 0 {
-		app.HandleError(c, &HTTPError{http.StatusBadRequest, "no available property"})
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "no available property")
 	}
 
 	sql := "UPDATE videos" +
@@ -298,100 +285,87 @@ func (app *App) PutVideo(c *gin.Context) {
 		" WHERE `id`=?"
 	_, err := app.db.Exec(sql, append(vals, videoID)...)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	if video, err := app.SelectVideo(videoID); err == nil {
-		c.JSON(http.StatusOK, video)
+		return c.JSON(http.StatusOK, video)
 	} else {
-		app.HandleError(c, err)
+		return err
 	}
 }
 
-func (app *App) PutThumbnail(c *gin.Context) {
+func (app *App) PutThumbnail(c echo.Context) error {
 	videoID := c.Param("id")
 
 	sql := "SELECT c.`owner` FROM videos v JOIN channels c ON v.`channel_id`=c.`id` WHERE v.`id`=?"
 	rows, err := app.db.Query(sql, videoID)
 	if err != nil {
-		app.HandleError(c, AuthorizationError())
-		return
+		return echo.ErrUnauthorized
 	}
 
 	if rows.Next() {
 		var owner string
 		rows.Scan(&owner)
 
-		if owner != c.GetString("UserID") {
-			app.HandleError(c, &HTTPError{http.StatusForbidden, "you don't have permission on this video"})
-			return
+		if owner != GetUserID(c) {
+			return echo.NewHTTPError(http.StatusForbidden, "you don't have permission on this video")
 		}
 	}
 
 	header, err := c.FormFile("file")
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	file, err := header.Open()
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 	defer file.Close()
 
 	img, err := imaging.Decode(file)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	resized := imaging.Resize(img, app.Config.Thumbnail.Width, app.Config.Thumbnail.Height, imaging.Lanczos)
 	temp, err := ioutil.TempFile("", "thumbnail")
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 	defer os.Remove(temp.Name())
 
 	err = imaging.Encode(temp, resized, imaging.JPEG, imaging.JPEGQuality(app.Config.Thumbnail.Quality))
 	if err != nil {
 		temp.Close()
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	if err = temp.Close(); err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	if err = app.StoreFile(temp.Name(), "videos/"+videoID+"/thumbnail.jpg"); err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
-	c.AbortWithStatus(http.StatusNoContent)
+	return c.NoContent(http.StatusNoContent)
 }
 
-func (app *App) GetVideoComments(c *gin.Context) {
+func (app *App) GetVideoComments(c echo.Context) error {
 	videoID := c.Param("id")
 
 	rows, err := app.db.Queryx("SELECT 1 FROM videos WHERE `id`=? AND `status`='ACTIVE'", videoID)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	} else if !rows.Next() {
-		app.HandleError(c, NotFoundError("video"))
-		return
+		return NotFoundError("video")
 	}
 
 	rows, err = app.db.Unsafe().Queryx("SELECT * FROM comments WHERE `video_id`=?", videoID)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	comments := []Comment{}
@@ -401,7 +375,7 @@ func (app *App) GetVideoComments(c *gin.Context) {
 		comments = append(comments, comment)
 	}
 
-	c.JSON(http.StatusOK, comments)
+	return c.JSON(http.StatusOK, comments)
 }
 
 type Comment struct {
@@ -429,14 +403,13 @@ func (app *App) SelectComment(id string) (c *Comment, err error) {
 	return
 }
 
-func (app *App) PostComment(c *gin.Context) {
+func (app *App) PostComment(c echo.Context) error {
 	body := struct {
 		VideoID string `json:"video_id"`
 		Content string `json:"content"`
 	}{}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		app.HandleError(c, err)
-		return
+	if err := c.Bind(&body); err != nil {
+		return err
 	}
 
 	stmt, err := app.db.Prepare(
@@ -444,8 +417,7 @@ func (app *App) PostComment(c *gin.Context) {
 			"SELECT ?, `id`, ?, ?, ? FROM videos WHERE `id`=? AND `status`='ACTIVE'",
 	)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 	defer stmt.Close()
 
@@ -456,52 +428,48 @@ func (app *App) PostComment(c *gin.Context) {
 	for i := 0; i < app.Config.ULIDConflictRetry+1; i++ {
 		id = ulid.MustNew(ulid.Timestamp(now), entropy)
 
-		res, err = stmt.Exec(id.String(), body.Content, c.GetString("UserID"), now, body.VideoID)
+		res, err = stmt.Exec(id.String(), body.Content, GetUserID(c), now, body.VideoID)
 
 		if err == nil {
 			break
 		}
 	}
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	if rows, err := res.RowsAffected(); err != nil {
-		app.HandleError(c, err)
+		return err
 	} else if rows == 0 {
-		app.HandleError(c, NotFoundError("video"))
+		return NotFoundError("video")
 	} else {
 		comment, _ := app.SelectComment(id.String())
-		c.JSON(http.StatusOK, comment)
+		return c.JSON(http.StatusOK, comment)
 	}
 }
 
-func (app *App) DeleteComment(c *gin.Context) {
+func (app *App) DeleteComment(c echo.Context) error {
 	commentID := c.Param("id")
 	rows, err := app.db.Query("SELECT `writer_id` FROM comments WHERE `id`=?", commentID)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	if rows.Next() {
 		var writer string
 		rows.Scan(&writer)
 
-		if writer != c.GetString("UserID") {
-			app.HandleError(c, &HTTPError{http.StatusForbidden, "you don't have permission on this comment"})
-			return
+		if writer != GetUserID(c) {
+			return echo.NewHTTPError(http.StatusForbidden, "you don't have permission on this comment")
 		}
 	} else {
-		app.HandleError(c, NotFoundError("comment"))
-		return
+		return NotFoundError("comment")
 	}
 
 	sql := "DELETE FROM comments WHERE `id`=?"
 	if _, err = app.db.Exec(sql, commentID); err == nil {
-		c.AbortWithStatus(http.StatusNoContent)
+		return c.NoContent(http.StatusNoContent)
 	} else {
-		app.HandleError(c, err)
+		return err
 	}
 }

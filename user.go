@@ -6,13 +6,13 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
+	jwtgo "github.com/dgrijalva/jwt-go"
 	"github.com/disintegration/imaging"
-	"github.com/gin-gonic/gin"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
+	"github.com/labstack/echo/v4"
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwt"
 	"github.com/oklog/ulid/v2"
@@ -44,25 +44,23 @@ func (app *App) SelectUser(id string) (u *User, err error) {
 	return
 }
 
-func (app *App) GetMe(c *gin.Context) {
-	me, err := app.SelectUser(c.GetString("UserID"))
+func (app *App) GetMe(c echo.Context) error {
+	me, err := app.SelectUser(GetUserID(c))
 	if err != nil {
-		if v, ok := err.(*HTTPError); ok && v.StatusCode == http.StatusNotFound {
-			err = AuthorizationError()
+		if v, ok := err.(*echo.HTTPError); ok && v.Code == http.StatusNotFound {
+			err = echo.ErrUnauthorized
 		}
 
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
-	c.JSON(http.StatusOK, me)
+	return c.JSON(http.StatusOK, me)
 }
 
-func (app *App) GetMyChannels(c *gin.Context) {
-	rows, err := app.db.Unsafe().Queryx("SELECT * FROM channels WHERE `owner`=?", c.GetString("UserID"))
+func (app *App) GetMyChannels(c echo.Context) error {
+	rows, err := app.db.Unsafe().Queryx("SELECT * FROM channels WHERE `owner`=?", GetUserID(c))
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	channels := []Channel{}
@@ -72,18 +70,20 @@ func (app *App) GetMyChannels(c *gin.Context) {
 		channels = append(channels, channel)
 	}
 
-	c.JSON(http.StatusOK, channels)
+	return c.JSON(http.StatusOK, channels)
 }
 
-func (app *App) PostUser(c *gin.Context) {
+func (app *App) PostUser(c echo.Context) error {
 	body := struct {
-		Email    string `json:"email" binding:"email,required,max=255"`
-		Password string `json:"password" binding:"required,min=8,max=255"`
-		Name     string `json:"name" binding:"required,max=64"`
+		Email    string `json:"email" validate:"email,required,max=255"`
+		Password string `json:"password" validate:"required,min=8,max=255"`
+		Name     string `json:"name" validate:"required,max=64"`
 	}{}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		app.HandleError(c, err)
-		return
+	if err := c.Bind(&body); err != nil {
+		return err
+	}
+	if err := c.Validate(body); err != nil {
+		return err
 	}
 
 	now := time.Now()
@@ -92,8 +92,7 @@ func (app *App) PostUser(c *gin.Context) {
 	var id ulid.ULID
 	tx, err := app.db.Beginx()
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	_, err = tx.Exec("INSERT INTO users (`id`, `email`, `password`, `name`, `registered_at`) VALUES (?, ?, ?, ?, ?)",
@@ -105,21 +104,19 @@ func (app *App) PostUser(c *gin.Context) {
 	)
 
 	if err != nil {
-		if v, ok := err.(*mysql.MySQLError); ok && v.Number == 1062 {
-			app.HandleError(c, &HTTPError{http.StatusConflict, "the e-mail is already registered"})
-		} else {
-			app.HandleError(c, err)
-		}
-
 		tx.Rollback()
-		return
+
+		if v, ok := err.(*mysql.MySQLError); ok && v.Number == 1062 {
+			return echo.NewHTTPError(http.StatusConflict, "the e-mail is already registered")
+		} else {
+			return err
+		}
 	}
 
 	stmt, err := tx.Prepare("UPDATE users SET `id`=? WHERE `email`=?")
 	if err != nil {
 		tx.Rollback()
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	for i := 0; i < app.Config.ULIDConflictRetry+1; i++ {
@@ -132,62 +129,61 @@ func (app *App) PostUser(c *gin.Context) {
 		}
 	}
 
-	if stmt.Close() == nil && err == nil {
+	if err != nil {
+		stmt.Close()
+		tx.Rollback()
+		return err
+	}
+
+	if err = stmt.Close(); err == nil {
 		tx.Commit()
-		c.JSON(http.StatusOK, gin.H{"id": id})
+		return c.JSON(http.StatusOK, echo.Map{"id": id})
 	} else {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Unknown server error."})
+		return err
 	}
 }
 
-func (app *App) PutUserPicture(c *gin.Context) {
-	userID := c.GetString("UserID")
+func (app *App) PutUserPicture(c echo.Context) error {
+	userID := GetUserID(c)
 
 	header, err := c.FormFile("file")
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	file, err := header.Open()
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 	defer file.Close()
 
 	img, err := imaging.Decode(file)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	dir, err := ioutil.TempDir("", "picture")
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 	defer os.RemoveAll(dir)
 
 	for _, o := range app.Config.UserPicture {
 		output, err := os.Create(fmt.Sprintf("%s/%dx%d.jpg", dir, o.Width, o.Height))
 		if err != nil {
-			app.HandleError(c, err)
-			return
+			return err
 		}
 
 		resized := imaging.Fill(img, o.Width, o.Height, imaging.Center, imaging.Lanczos)
 		err = imaging.Encode(output, resized, imaging.JPEG, imaging.JPEGQuality(app.Config.Thumbnail.Quality))
 		if err != nil {
 			output.Close()
-			app.HandleError(c, err)
-			return
+			return err
 		}
 
 		if err = output.Close(); err != nil {
-			app.HandleError(c, err)
-			return
+			return err
 		}
 	}
 
@@ -196,40 +192,38 @@ func (app *App) PutUserPicture(c *gin.Context) {
 	fileName := "u" + userID + ulid.MustNew(ulid.Timestamp(now), entropy).String()
 
 	if err = app.StoreFile(dir, "images/"+fileName); err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	_, err = app.db.Query("UPDATE users SET `picture`=? WHERE `id`=?", fileName, userID)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	me, err := app.SelectUser(userID)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
-	c.JSON(http.StatusOK, me)
+	return c.JSON(http.StatusOK, me)
 }
 
-func (app *App) PostToken(c *gin.Context) {
+func (app *App) PostToken(c echo.Context) error {
 	body := struct {
-		Email    string `json:"email" binding:"required"`
-		Password string `json:"password" binding:"required"`
+		Email    string `json:"email" validate:"required"`
+		Password string `json:"password" validate:"required"`
 	}{}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		app.HandleError(c, err)
-		return
+	if err := c.Bind(&body); err != nil {
+		return err
+	}
+	if err := c.Validate(body); err != nil {
+		return err
 	}
 
 	sql := "SELECT `id` FROM users WHERE `email`=? AND `password`=?"
 	rows, err := app.db.Query(sql, body.Email, hashPassword(body.Email, body.Password))
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	if rows.Next() {
@@ -241,39 +235,24 @@ func (app *App) PostToken(c *gin.Context) {
 
 		signed, err := jwt.Sign(token, jwa.HS256, []byte(app.Config.AuthSignKey))
 		if err != nil {
-			app.HandleError(c, err)
-			return
+			return err
 		}
 
-		c.JSON(http.StatusOK, gin.H{"token": string(signed)})
+		return c.JSON(http.StatusOK, echo.Map{"token": string(signed)})
 	} else {
-		app.HandleError(c, AuthorizationError())
-	}
-}
-
-func (app *App) AuthMiddleware(allowUnauth bool) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		s := strings.Split(c.GetHeader("Authorization"), " ")
-		if len(s) == 2 && s[0] == "Bearer" {
-			token, err := jwt.Parse([]byte(s[1]), jwt.WithVerify(jwa.HS256, []byte(app.Config.AuthSignKey)))
-			if err == nil {
-				if id, ok := token.Get("user_id"); ok {
-					c.Set("UserID", id)
-					c.Next()
-					return
-				}
-			}
-		}
-
-		if allowUnauth {
-			c.Next()
-		} else {
-			app.HandleError(c, AuthorizationError())
-		}
+		return echo.ErrUnauthorized
 	}
 }
 
 func hashPassword(email string, password string) []byte {
 	hashed := sha3.Sum256([]byte(email + password))
 	return hashed[:]
+}
+
+func GetUserID(c echo.Context) string {
+	if token, ok := c.Get("user").(*jwtgo.Token); ok {
+		return token.Claims.(jwtgo.MapClaims)["user_id"].(string)
+	}
+
+	return ""
 }

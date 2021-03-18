@@ -6,57 +6,75 @@ import (
 	"io/ioutil"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
-	ut "github.com/go-playground/universal-translator"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 )
 
 func main() {
 	app := NewApp()
 
-	gin.SetMode(gin.ReleaseMode)
+	e := echo.New()
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowMethods: []string{
+			http.MethodGet,
+			http.MethodPost,
+			http.MethodPut,
+			http.MethodDelete,
+			http.MethodPatch,
+			http.MethodOptions,
+			http.MethodHead,
+		},
+		AllowHeaders: []string{"*"},
+	}))
 
-	router := gin.Default()
-	router.Use(func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Methods", "*")
-		c.Header("Access-Control-Allow-Headers", "*")
+	userAuth := middleware.JWT([]byte(app.Config.AuthSignKey))
+	uploadAuth := middleware.JWTWithConfig(middleware.JWTConfig{
+		SigningKey: []byte(app.Config.UploadSignKey),
+		ContextKey: "uploadToken",
+	})
 
-		if c.Request.Method == http.MethodOptions {
-			c.AbortWithStatus(http.StatusNoContent)
-			return
+	e.GET("/", func(c echo.Context) error {
+		return c.String(http.StatusOK, "Hello, World!")
+	})
+	e.PUT("/videos/:id", app.PutVideo, func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			userErr := userAuth(func(echo.Context) error { return nil })(c)
+			uploadErr := uploadAuth(func(echo.Context) error { return nil })(c)
+
+			if userErr != nil && uploadErr != nil {
+				return echo.ErrUnauthorized
+			}
+
+			return next(c)
 		}
-
-		c.Next()
 	})
 
-	router.GET("/", func(c *gin.Context) {
-		c.String(http.StatusOK, "Hello, World!")
-	})
-	router.POST("/users", app.PostUser)
-	router.POST("/users/tokens", app.PostToken)
-	router.GET("/channels/:id", app.GetChannelById)
-	router.GET("/channels/:id/videos", app.GetChannelVideos)
-	router.GET("/videos", app.GetVideos)
-	router.GET("/videos/:id", app.GetVideo)
-	router.PUT("/videos/:id", app.PutVideo)
-	router.GET("/videos/:id/comments", app.GetVideoComments)
+	e.POST("/users", app.PostUser)
+	e.POST("/users/tokens", app.PostToken)
+	e.GET("/channels/:id", app.GetChannel)
+	e.GET("/channels/:id/videos", app.GetChannelVideos)
+	e.GET("/videos", app.GetVideos)
+	e.GET("/videos/:id", app.GetVideo)
+	e.GET("/videos/:id/comments", app.GetVideoComments)
 
-	authorized := router.Group("/", app.AuthMiddleware(false))
+	authorized := e.Group("", userAuth)
 	authorized.POST("/channels", app.PostChannel)
-	authorized.PUT("/channels/:id/picture", app.ChannelAuthParam("id"), app.PutChannelPicture)
+	authorized.PUT("/channels/:id/picture", app.PutChannelPicture)
 	authorized.POST("/videos", app.PostVideo)
 	authorized.PUT("/videos/:id/thumbnail", app.PutThumbnail)
 	authorized.POST("/comments", app.PostComment)
 	authorized.DELETE("/comments/:id", app.DeleteComment)
 
-	me := authorized.Group("users/me")
+	me := authorized.Group("/users/me")
 	me.GET("", app.GetMe)
 	me.GET("/channels", app.GetMyChannels)
 	me.PUT("/picture", app.PutUserPicture)
 
-	router.Run(app.Config.Listen...)
+	e.HTTPErrorHandler = app.ErrorHandler
+	InitValidTrans(e)
+	e.Logger.Fatal(e.Start(app.Config.Listen[0]))
 }
 
 type App struct {
@@ -76,13 +94,11 @@ type App struct {
 		UserPicture       []ImageOption `json:"user_picture"`
 		ChannelPicture    []ImageOption `json:"channel_picture"`
 	}
-	db         *sqlx.DB
-	validTrans ut.Translator
+	db *sqlx.DB
 }
 
 func NewApp() *App {
 	app := new(App)
-	app.InitValidTrans()
 
 	data, _ := ioutil.ReadFile("config.json")
 	json.Unmarshal(data, &app.Config)

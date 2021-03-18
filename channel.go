@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/disintegration/imaging"
-	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
+	"github.com/labstack/echo/v4"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -40,30 +40,31 @@ func (app *App) SelectChannel(id string) (channel *Channel, err error) {
 	return
 }
 
-func (app *App) GetChannelById(c *gin.Context) {
+func (app *App) GetChannel(c echo.Context) error {
 	channel, err := app.SelectChannel(c.Param("id"))
 	if err != nil {
-		app.HandleError(c, err)
+		return err
 	} else {
-		c.JSON(http.StatusOK, channel)
+		return c.JSON(http.StatusOK, channel)
 	}
 }
 
-func (app *App) PostChannel(c *gin.Context) {
+func (app *App) PostChannel(c echo.Context) error {
 	body := struct {
-		Name        string `json:"name" binding:"required,max=100"`
+		Name        string `json:"name" validate:"required,max=100"`
 		Description string `json:"description"`
 	}{}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		app.HandleError(c, err)
-		return
+	if err := c.Bind(&body); err != nil {
+		return err
+	}
+	if err := c.Validate(body); err != nil {
+		return err
 	}
 
 	sql := "INSERT INTO channels (`id`, `name`, `description`, `owner`, `created_at`) VALUES (?, ?, ?, ?, ?)"
 	stmt, err := app.db.Prepare(sql)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 	defer stmt.Close()
 
@@ -74,7 +75,7 @@ func (app *App) PostChannel(c *gin.Context) {
 	for i := 0; i < app.Config.ULIDConflictRetry+1; i++ {
 		id = ulid.MustNew(ulid.Timestamp(now), entropy)
 
-		_, err := stmt.Exec(id.String(), body.Name, body.Description, c.GetString("UserID"), now)
+		_, err := stmt.Exec(id.String(), body.Name, body.Description, GetUserID(c), now)
 
 		if err == nil {
 			inserted = true
@@ -83,59 +84,55 @@ func (app *App) PostChannel(c *gin.Context) {
 	}
 
 	if inserted {
-		c.JSON(http.StatusOK, gin.H{"id": id})
+		return c.JSON(http.StatusOK, echo.Map{"id": id})
 	} else {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Unknown server error."})
+		return echo.ErrInternalServerError
 	}
 }
 
-func (app *App) PutChannelPicture(c *gin.Context) {
+func (app *App) PutChannelPicture(c echo.Context) error {
 	channelID := c.Param("id")
+	if err := app.CheckChannelAuth(channelID, GetUserID(c)); err != nil {
+		return err
+	}
 
 	header, err := c.FormFile("file")
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	file, err := header.Open()
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 	defer file.Close()
 
 	img, err := imaging.Decode(file)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	dir, err := ioutil.TempDir("", "picture")
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 	defer os.RemoveAll(dir)
 
 	for _, o := range app.Config.UserPicture {
 		output, err := os.Create(fmt.Sprintf("%s/%dx%d.jpg", dir, o.Width, o.Height))
 		if err != nil {
-			app.HandleError(c, err)
-			return
+			return err
 		}
 
 		resized := imaging.Fill(img, o.Width, o.Height, imaging.Center, imaging.Lanczos)
 		err = imaging.Encode(output, resized, imaging.JPEG, imaging.JPEGQuality(app.Config.Thumbnail.Quality))
 		if err != nil {
 			output.Close()
-			app.HandleError(c, err)
-			return
+			return err
 		}
 
 		if err = output.Close(); err != nil {
-			app.HandleError(c, err)
-			return
+			return err
 		}
 	}
 
@@ -144,43 +141,43 @@ func (app *App) PutChannelPicture(c *gin.Context) {
 	fileName := "c" + channelID + ulid.MustNew(ulid.Timestamp(now), entropy).String()
 
 	if err = app.StoreFile(dir, "images/"+fileName); err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	_, err = app.db.Query("UPDATE channels SET `picture`=? WHERE `id`=?", fileName, channelID)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	channel, err := app.SelectChannel(channelID)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
-	c.JSON(http.StatusOK, channel)
+	return c.JSON(http.StatusOK, channel)
 }
 
-func (app *App) GetChannelVideos(c *gin.Context) {
+func (app *App) GetChannelVideos(c echo.Context) error {
 	channelID := c.Param("id")
 
 	sql := "SELECT * FROM videos WHERE `channel_id`=? AND `status`='ACTIVE'"
 	rows, err := app.db.Unsafe().Queryx(sql, channelID)
 	if err != nil {
-		app.HandleError(c, err)
-		return
+		return err
 	}
 
 	videos := []Video{}
 	for rows.Next() {
 		v := Video{}
 		err = rows.StructScan(&v)
+		if err != nil {
+			return err
+		}
+
 		videos = append(videos, v)
 	}
 
-	c.JSON(http.StatusOK, videos)
+	return c.JSON(http.StatusOK, videos)
 }
 
 func (app *App) CheckChannelAuth(channelID string, userID string) error {
@@ -194,21 +191,11 @@ func (app *App) CheckChannelAuth(channelID string, userID string) error {
 		rows.Scan(&owner)
 
 		if owner != userID {
-			return &HTTPError{http.StatusForbidden, "you don't have permission on this channel"}
+			return echo.NewHTTPError(http.StatusForbidden, "you don't have permission on this channel")
 		}
 	} else {
 		return NotFoundError("channel")
 	}
 
 	return nil
-}
-
-func (app *App) ChannelAuthParam(param string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if err := app.CheckChannelAuth(c.Param(param), c.GetString("UserID")); err == nil {
-			c.Next()
-		} else {
-			app.HandleError(c, err)
-		}
-	}
 }

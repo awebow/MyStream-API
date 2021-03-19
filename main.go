@@ -40,6 +40,7 @@ func main() {
 	})
 
 	e.GET("/users/:id", app.GetUser)
+	e.GET("/users/emails/:email", app.GetEmail)
 	e.POST("/users", app.PostUser)
 	e.POST("/users/tokens", app.PostToken)
 	e.GET("/channels/:id", app.GetChannel)

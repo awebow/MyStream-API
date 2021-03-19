@@ -76,6 +76,21 @@ func (app *App) GetMe(c echo.Context) error {
 	return c.JSON(http.StatusOK, me)
 }
 
+func (app *App) GetEmail(c echo.Context) error {
+	email := c.Param("email")
+	sql := "SELECT 1 FROM users WHERE `email`=?"
+	rows, err := app.db.Queryx(sql, email)
+	if err != nil {
+		return err
+	}
+
+	if rows.Next() {
+		return c.JSON(http.StatusOK, echo.Map{"email": email})
+	} else {
+		return NotFoundError("user")
+	}
+}
+
 func (app *App) GetMyChannels(c echo.Context) error {
 	rows, err := app.db.Unsafe().Queryx("SELECT * FROM channels WHERE `owner`=?", GetUserID(c))
 	if err != nil {

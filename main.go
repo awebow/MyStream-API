@@ -71,6 +71,7 @@ func main() {
 
 	me := authorized.Group("/users/me")
 	me.GET("", app.GetMe)
+	me.PUT("", app.PutMe)
 	me.GET("/channels", app.GetMyChannels)
 	me.PUT("/picture", app.PutUserPicture)
 

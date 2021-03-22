@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
@@ -74,6 +75,59 @@ func (app *App) GetMe(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, me)
+}
+
+func (app *App) PutMe(c echo.Context) error {
+	body := struct {
+		CurrentPassword *string `json:"current_pw"`
+		Password        *string `json:"password" validate:"omitempty,min=8,max=255"`
+		Name            *string `json:"name" validate:"omitempty,max=64"`
+	}{}
+	if err := c.Bind(&body); err != nil {
+		return err
+	}
+	if err := c.Validate(body); err != nil {
+		return err
+	}
+
+	if body.Name == nil && body.Password == nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "no available field")
+	}
+
+	if body.Password != nil && body.CurrentPassword == nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "the current password is needed to change password")
+	}
+
+	userID := GetUserID(c)
+
+	var password *[]byte
+	if body.Password != nil {
+		rows, err := app.db.Query("SELECT `email`, `password` FROM users WHERE `id`=?", userID)
+		if err != nil {
+			return nil
+		}
+
+		var email string
+		var currentPassword []byte
+		rows.Next()
+		rows.Scan(&email, &currentPassword)
+
+		if !bytes.Equal(currentPassword, hashPassword(email, *body.CurrentPassword)) {
+			return echo.NewHTTPError(http.StatusUnauthorized, "wrong current password")
+		}
+
+		hashed := hashPassword(email, *body.Password)
+		password = &hashed
+	}
+
+	sql := "UPDATE users SET `password`=IFNULL(?, `password`), `name`=IFNULL(?, `name`)" +
+		"WHERE `id`=?"
+	_, err := app.db.Exec(sql, password, body.Name, userID)
+	if err != nil {
+		return err
+	}
+
+	return c.NoContent(http.StatusNoContent)
 }
 
 func (app *App) GetEmail(c echo.Context) error {

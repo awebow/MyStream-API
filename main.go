@@ -63,6 +63,7 @@ func main() {
 
 	authorized := e.Group("", userAuth)
 	authorized.POST("/channels", app.PostChannel)
+	authorized.GET("/channels/:id/permissions", app.GetChannelPermission)
 	authorized.PUT("/channels/:id/picture", app.PutChannelPicture)
 	authorized.POST("/videos", app.PostVideo)
 	authorized.PUT("/videos/:id/thumbnail", app.PutThumbnail)

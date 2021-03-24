@@ -49,6 +49,15 @@ func (app *App) GetChannel(c echo.Context) error {
 	}
 }
 
+func (app *App) GetChannelPermission(c echo.Context) error {
+	rows, err := app.db.Query("SELECT 1 FROM channels WHERE `owner`=?", GetUserID(c))
+	if err != nil {
+		return err
+	}
+
+	return c.JSON(http.StatusOK, echo.Map{"ownership": rows.Next()})
+}
+
 func (app *App) PostChannel(c echo.Context) error {
 	body := struct {
 		Name        string `json:"name" validate:"required,max=100"`

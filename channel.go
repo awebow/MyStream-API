@@ -189,21 +189,29 @@ func (app *App) GetChannelVideos(c echo.Context) error {
 	return c.JSON(http.StatusOK, videos)
 }
 
-func (app *App) CheckChannelAuth(channelID string, userID string) error {
+func (app *App) SelectChannelOwnerID(channelID string) (string, error) {
 	rows, err := app.db.Query("SELECT `owner` FROM channels WHERE `id`=?", channelID)
+	if err != nil {
+		return "", err
+	}
+
+	if rows.Next() {
+		var ownerID string
+		err = rows.Scan(&ownerID)
+		return ownerID, err
+	} else {
+		return "", NotFoundError("channel")
+	}
+}
+
+func (app *App) CheckChannelAuth(channelID string, userID string) error {
+	ownerID, err := app.SelectChannelOwnerID(channelID)
 	if err != nil {
 		return err
 	}
 
-	if rows.Next() {
-		var owner string
-		rows.Scan(&owner)
-
-		if owner != userID {
-			return echo.NewHTTPError(http.StatusForbidden, "you don't have permission on this channel")
-		}
-	} else {
-		return NotFoundError("channel")
+	if ownerID != userID {
+		return echo.NewHTTPError(http.StatusForbidden, "you don't have permission on this channel")
 	}
 
 	return nil

@@ -7,9 +7,9 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
-	jwtgo "github.com/dgrijalva/jwt-go"
 	"github.com/disintegration/imaging"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -332,15 +332,41 @@ func (app *App) PostToken(c echo.Context) error {
 	}
 }
 
+func (app *App) AuthUser(bearer string) (string, error) {
+	if s := strings.Split(bearer, " "); len(s) == 2 && s[0] == "Bearer" {
+		token, err := jwt.Parse([]byte(s[1]), jwt.WithVerify(jwa.HS256, []byte(app.Config.AuthSignKey)))
+		if err != nil {
+			return "", err
+		}
+
+		if id, ok := token.Get("user_id"); ok {
+			return id.(string), nil
+		}
+	}
+
+	return "", echo.NewHTTPError(http.StatusUnauthorized, "invalid authorization token")
+}
+
+func (app *App) AuthUserMiddleware(allowUnauth bool) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			id, err := app.AuthUser(c.Request().Header.Get("Authorization"))
+			if !allowUnauth && err != nil {
+				return err
+			}
+
+			c.Set("UserID", id)
+			return next(c)
+		}
+	}
+}
+
 func hashPassword(email string, password string) []byte {
 	hashed := sha3.Sum256([]byte(email + password))
 	return hashed[:]
 }
 
-func GetUserID(c echo.Context) string {
-	if token, ok := c.Get("user").(*jwtgo.Token); ok {
-		return token.Claims.(jwtgo.MapClaims)["user_id"].(string)
-	}
-
-	return ""
+func GetUserID(c echo.Context) (id string) {
+	id, _ = c.Get("UserID").(string)
+	return
 }

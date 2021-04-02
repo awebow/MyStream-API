@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"sync"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/gorilla/websocket"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -29,7 +31,7 @@ func main() {
 		AllowHeaders: []string{"*"},
 	}))
 
-	userAuth := middleware.JWT([]byte(app.Config.AuthSignKey))
+	userAuth := app.AuthUserMiddleware(false)
 	uploadAuth := middleware.JWTWithConfig(middleware.JWTConfig{
 		SigningKey: []byte(app.Config.UploadSignKey),
 		ContextKey: "uploadToken",
@@ -58,7 +60,7 @@ func main() {
 			return next(c)
 		}
 	})
-	e.GET("/videos/:id", app.GetVideo)
+	e.GET("/videos/:id", app.GetVideo, app.AuthUserMiddleware(true))
 	e.GET("/videos/:id/comments", app.GetVideoComments)
 
 	authorized := e.Group("", userAuth)
@@ -78,6 +80,12 @@ func main() {
 
 	e.HTTPErrorHandler = app.ErrorHandler
 	InitValidTrans(e)
+
+	if app.Config.Websocket.Enabled {
+		e.GET("/ws", app.ServeWebsocket)
+		app.InitWebsocket()
+	}
+
 	e.Logger.Fatal(e.Start(app.Config.Listen[0]))
 }
 
@@ -97,8 +105,20 @@ type App struct {
 		Thumbnail         ImageOption   `json:"thumbnail"`
 		UserPicture       []ImageOption `json:"user_picture"`
 		ChannelPicture    []ImageOption `json:"channel_picture"`
+		Websocket         struct {
+			Enabled      bool `json:"enabled"`
+			PingInterval int  `json:"ping_interval"`
+			PongTimeout  int  `json:"pong_timeout"`
+		} `json:"websocket"`
 	}
-	db *sqlx.DB
+	db          *sqlx.DB
+	upgrader    websocket.Upgrader
+	connects    chan *WebsocketClient
+	disconnects chan *WebsocketClient
+	websockets  map[uint64]*WebsocketClient
+	rooms       map[string]*Room
+	newRooms    chan *Room
+	roomsLock   *sync.RWMutex
 }
 
 func NewApp() *App {
@@ -119,6 +139,7 @@ func NewApp() *App {
 	}
 
 	app.db = db
+	app.upgrader.CheckOrigin = func(r *http.Request) bool { return true }
 
 	return app
 }

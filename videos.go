@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
@@ -115,14 +116,21 @@ func (app *App) SelectVideo(id string) (v *Video, err error) {
 }
 
 func (app *App) GetVideo(c echo.Context) error {
-	videoID := c.Param("id")
-
-	video, err := app.SelectVideo(videoID)
-	if err == nil {
-		return c.JSON(http.StatusOK, video)
-	} else {
+	video, err := app.SelectVideo(c.Param("id"))
+	if err != nil {
 		return err
 	}
+
+	ownerID, err := app.SelectChannelOwnerID(video.ChannelID)
+	if err != nil {
+		return err
+	}
+
+	if video.Status == StatusInactive || (video.Status == StatusEncoding && ownerID != GetUserID(c)) {
+		return NotFoundError("video")
+	}
+
+	return c.JSON(http.StatusOK, video)
 }
 
 func (app *App) GetVideos(c echo.Context) error {
@@ -211,7 +219,10 @@ func (app *App) PostVideo(c echo.Context) error {
 			return err
 		}
 
-		return c.JSON(http.StatusOK, echo.Map{"token": string(signed)})
+		return c.JSON(http.StatusOK, &struct {
+			ID    string `json:"id"`
+			Token string `json:"token"`
+		}{id.String(), string(signed)})
 	} else {
 		return err
 	}
@@ -289,6 +300,10 @@ func (app *App) PutVideo(c echo.Context) error {
 	}
 
 	if video, err := app.SelectVideo(videoID); err == nil {
+		if editMeta && body.Status != nil && *body.Status == StatusActive {
+			app.EmitToRoom(fmt.Sprintf("video/%s/encode", videoID), "encoded", video)
+		}
+
 		return c.JSON(http.StatusOK, video)
 	} else {
 		return err
@@ -356,7 +371,9 @@ func (app *App) PutThumbnail(c echo.Context) error {
 func (app *App) GetVideoComments(c echo.Context) error {
 	videoID := c.Param("id")
 
-	rows, err := app.db.Queryx("SELECT 1 FROM videos WHERE `id`=? AND `status`='ACTIVE'", videoID)
+	sql := "SELECT 1 FROM videos v JOIN channels c ON c.`id`=v.`channel_id` " +
+		"WHERE v.`id`=? AND (v.`status`='ACTIVE' OR (v.`status`='ENCODING' AND c.`owner`=?))"
+	rows, err := app.db.Queryx(sql, videoID, GetUserID(c))
 	if err != nil {
 		return err
 	} else if !rows.Next() {

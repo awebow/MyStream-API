@@ -10,6 +10,7 @@ require (
 	github.com/go-playground/universal-translator v0.17.0
 	github.com/go-playground/validator/v10 v10.4.1
 	github.com/go-sql-driver/mysql v1.5.0
+	github.com/gorilla/websocket v1.4.2
 	github.com/jmoiron/sqlx v1.3.1
 	github.com/labstack/echo/v4 v4.2.1
 	github.com/leodido/go-urn v1.2.1 // indirect

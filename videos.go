@@ -301,7 +301,9 @@ func (app *App) PutVideo(c echo.Context) error {
 
 	if video, err := app.SelectVideo(videoID); err == nil {
 		if editMeta && body.Status != nil && *body.Status == StatusActive {
-			app.EmitToRoom(fmt.Sprintf("video/%s/encode", videoID), "encoded", video)
+			room := fmt.Sprintf("video/%s/encode", videoID)
+			app.ws.Publish(room, "encoded", video)
+			app.ws.UnsubscribeAll(room)
 		}
 
 		return c.JSON(http.StatusOK, video)
@@ -431,13 +433,15 @@ func (app *App) PostComment(c echo.Context) error {
 
 	stmt, err := app.db.Prepare(
 		"INSERT INTO comments (`id`, `video_id`, `content`, `writer_id`, `posted_at`) " +
-			"SELECT ?, `id`, ?, ?, ? FROM videos WHERE `id`=? AND `status`='ACTIVE'",
+			"SELECT ?, v.`id`, ?, ?, ? FROM videos v JOIN channels c ON c.`id`=v.`channel_id` " +
+			"WHERE v.`id`=? AND (v.`status`='ACTIVE' OR (v.`status`='ENCODING' AND c.`owner`=?))",
 	)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
+	userId := GetUserID(c)
 	var id ulid.ULID
 	now := time.Now()
 	entropy := ulid.Monotonic(rand.New(rand.NewSource(now.UnixNano())), 0)
@@ -445,7 +449,7 @@ func (app *App) PostComment(c echo.Context) error {
 	for i := 0; i < app.Config.ULIDConflictRetry+1; i++ {
 		id = ulid.MustNew(ulid.Timestamp(now), entropy)
 
-		res, err = stmt.Exec(id.String(), body.Content, GetUserID(c), now, body.VideoID)
+		res, err = stmt.Exec(id.String(), body.Content, userId, now, body.VideoID, userId)
 
 		if err == nil {
 			break

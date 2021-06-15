@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"sync"
 
+	"github.com/awebow/ezsock"
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/gorilla/websocket"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -61,7 +60,7 @@ func main() {
 		}
 	})
 	e.GET("/videos/:id", app.GetVideo, app.AuthUserMiddleware(true))
-	e.GET("/videos/:id/comments", app.GetVideoComments)
+	e.GET("/videos/:id/comments", app.GetVideoComments, app.AuthUserMiddleware(true))
 
 	authorized := e.Group("", userAuth)
 	authorized.POST("/channels", app.PostChannel)
@@ -83,7 +82,6 @@ func main() {
 
 	if app.Config.Websocket.Enabled {
 		e.GET("/ws", app.ServeWebsocket)
-		app.InitWebsocket()
 	}
 
 	e.Logger.Fatal(e.Start(app.Config.Listen[0]))
@@ -98,6 +96,11 @@ type App struct {
 			Password string `json:"password"`
 			Name     string `json:"name"`
 		} `json:"database"`
+		Redis struct {
+			Addr     string `json:"addr"`
+			Password string `json:"password"`
+			Database int    `json:"database"`
+		} `json:"redis"`
 		AuthSignKey       string        `json:"auth_sign_key"`
 		UploadSignKey     string        `json:"upload_sign_key"`
 		ULIDConflictRetry int           `json:"ulid_conflict_retry"`
@@ -111,14 +114,8 @@ type App struct {
 			PongTimeout  int  `json:"pong_timeout"`
 		} `json:"websocket"`
 	}
-	db          *sqlx.DB
-	upgrader    websocket.Upgrader
-	connects    chan *WebsocketClient
-	disconnects chan *WebsocketClient
-	websockets  map[uint64]*WebsocketClient
-	rooms       map[string]*Room
-	newRooms    chan *Room
-	roomsLock   *sync.RWMutex
+	db *sqlx.DB
+	ws *ezsock.Server
 }
 
 func NewApp() *App {
@@ -139,7 +136,18 @@ func NewApp() *App {
 	}
 
 	app.db = db
-	app.upgrader.CheckOrigin = func(r *http.Request) bool { return true }
+	if app.Config.Websocket.Enabled {
+		app.ws = ezsock.NewServer(ezsock.Config{
+			PingInterval: app.Config.Websocket.PingInterval,
+			PongTimeout:  app.Config.Websocket.PongTimeout,
+			Redis: ezsock.RedisConfig{
+				Addr:     app.Config.Redis.Addr,
+				Password: app.Config.Redis.Password,
+				DB:       app.Config.Redis.Database,
+			},
+			CheckOrigin: func(r *http.Request) bool { return true },
+		})
+	}
 
 	return app
 }

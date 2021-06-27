@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
@@ -21,6 +22,7 @@ import (
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwt"
 	"github.com/oklog/ulid/v2"
+	"github.com/olivere/elastic/v7"
 )
 
 type VideoStatus int
@@ -96,6 +98,7 @@ type Video struct {
 	Duration      float32     `json:"duration" db:"duration"`
 	Status        VideoStatus `json:"status" db:"status"`
 	PostedAt      *time.Time  `json:"posted_at" db:"posted_at"`
+	UpdatedAt     time.Time   `json:"updated_at" db:"updated_at"`
 	DeactivatedAt *time.Time  `json:"deactivated_at" db:"deactivated_at"`
 }
 
@@ -134,7 +137,12 @@ func (app *App) GetVideo(c echo.Context) error {
 }
 
 func (app *App) GetVideos(c echo.Context) error {
-	id := c.QueryParam("last_id")
+	var response struct {
+		Pagination *string `json:"pagination"`
+		Data       []Video `json:"data"`
+	}
+
+	pageToken := c.QueryParam("pagination")
 	limit := 20
 
 	var err error
@@ -149,28 +157,74 @@ func (app *App) GetVideos(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "value of 'limit' has to be 1~100")
 	}
 
-	var rows *sqlx.Rows
-	if id == "" {
-		sql := "SELECT * FROM videos WHERE `status`='ACTIVE' ORDER BY `id` DESC LIMIT ?"
-		rows, err = app.db.Unsafe().Queryx(sql, limit)
+	if q := c.QueryParam("query"); q != "" {
+		search := app.es.Search().
+			Index(app.Config.Elasticsearch.VideoIndex)
+
+		searchTime := time.Now()
+
+		if pageToken != "" {
+			page, err := parsePagination(pageToken)
+			if err != nil {
+				return err
+			}
+
+			searchTime = page.searchTime
+			search.SearchAfter(page.score, page.id.String())
+		}
+
+		search.Query(elastic.NewBoolQuery().Must(
+			elastic.NewRangeQuery("updated_at").Lte(searchTime),
+			elastic.NewMultiMatchQuery(q, "title^2", "description"),
+		)).
+			Size(limit).
+			Sort("_score", false).
+			Sort("_id", false)
+
+		res, err := search.Do(context.Background())
+
+		if err != nil {
+			return err
+		}
+
+		if res.Hits.TotalHits.Value == 0 {
+			return c.JSON(http.StatusOK, []Video{})
+		}
+
+		if length := len(res.Hits.Hits); length == limit {
+			last := res.Hits.Hits[length-1]
+			next := (&pagination{searchTime, *last.Score, ulid.MustParse(last.Id)}).tokenize()
+			response.Pagination = &next
+		}
+
+		stmt, err := app.db.Unsafe().Preparex("SELECT * FROM videos WHERE `id`=?")
+		if err != nil {
+			return err
+		}
+
+		response.Data = make([]Video, len(res.Hits.Hits))
+		for i, hit := range res.Hits.Hits {
+			stmt.Get(&response.Data[i], hit.Id)
+		}
 	} else {
-		sql := "SELECT * FROM videos WHERE `id` < ? AND `status`='ACTIVE' ORDER BY `id` DESC LIMIT ?"
-		rows, err = app.db.Unsafe().Queryx(sql, id, limit)
+		if pageToken != "" {
+			query := "SELECT * FROM videos WHERE `id` < ? ORDER BY `id` DESC LIMIT ?"
+			err = app.db.Unsafe().Select(&response.Data, query, pageToken, limit)
+		} else {
+			query := "SELECT * FROM videos ORDER BY `id` DESC LIMIT ?"
+			err = app.db.Unsafe().Select(&response.Data, query, limit)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		if length := len(response.Data); length == limit {
+			response.Pagination = &response.Data[length-1].ID
+		}
 	}
 
-	if err != nil {
-		return err
-	}
-
-	videos := []Video{}
-	for rows.Next() {
-		video := Video{}
-		rows.StructScan(&video)
-
-		videos = append(videos, video)
-	}
-
-	return c.JSON(http.StatusOK, videos)
+	return c.JSON(http.StatusOK, response)
 }
 
 func (app *App) PostVideo(c echo.Context) error {
@@ -231,9 +285,11 @@ func (app *App) PostVideo(c echo.Context) error {
 func (app *App) PutVideo(c echo.Context) error {
 	videoID := c.Param("id")
 	body := struct {
-		Duration *float32     `json:"duration"`
-		Status   *VideoStatus `json:"status"`
-		PostedAt *time.Time   `json:"posted_at"`
+		Title       *string      `json:"title"`
+		Description *string      `json:"description"`
+		Duration    *float32     `json:"duration"`
+		Status      *VideoStatus `json:"status"`
+		PostedAt    *time.Time   `json:"posted_at"`
 	}{}
 	if err := c.Bind(&body); err != nil {
 		return err
@@ -270,6 +326,16 @@ func (app *App) PutVideo(c echo.Context) error {
 	params := []string{}
 	vals := []interface{}{}
 
+	if body.Title != nil {
+		params = append(params, "`title`=?")
+		vals = append(vals, *body.Title)
+	}
+
+	if body.Description != nil {
+		params = append(params, "`description`=?")
+		vals = append(vals, *body.Description)
+	}
+
 	if editMeta {
 		if body.Duration != nil {
 			params = append(params, "`duration`=?")
@@ -292,7 +358,7 @@ func (app *App) PutVideo(c echo.Context) error {
 	}
 
 	sql := "UPDATE videos" +
-		" SET " + strings.Join(params, ",") +
+		" SET " + strings.Join(params, ",") + ", `updated_at`=CURRENT_TIMESTAMP()" +
 		" WHERE `id`=?"
 	_, err := app.db.Exec(sql, append(vals, videoID)...)
 	if err != nil {
@@ -300,6 +366,18 @@ func (app *App) PutVideo(c echo.Context) error {
 	}
 
 	if video, err := app.SelectVideo(videoID); err == nil {
+		if editMeta || body.Title != nil || body.Description != nil {
+			app.es.Index().
+				Index(app.Config.Elasticsearch.VideoIndex).
+				Id(videoID).
+				BodyJson(echo.Map{
+					"title":       video.Title,
+					"description": video.Description,
+					"updated_at":  video.UpdatedAt,
+				}).
+				Do(context.Background())
+		}
+
 		if editMeta && body.Status != nil && *body.Status == StatusActive {
 			room := fmt.Sprintf("video/%s/encode", videoID)
 			app.ws.Publish(room, "encoded", video)

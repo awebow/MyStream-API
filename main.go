@@ -11,6 +11,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/olivere/elastic/v7"
 )
 
 func main() {
@@ -62,16 +63,16 @@ func main() {
 	e.GET("/videos/:id", app.GetVideo, app.AuthUserMiddleware(true))
 	e.GET("/videos/:id/comments", app.GetVideoComments, app.AuthUserMiddleware(true))
 
-	authorized := e.Group("", userAuth)
-	authorized.POST("/channels", app.PostChannel)
-	authorized.GET("/channels/:id/permissions", app.GetChannelPermission)
-	authorized.PUT("/channels/:id/picture", app.PutChannelPicture)
-	authorized.POST("/videos", app.PostVideo)
-	authorized.PUT("/videos/:id/thumbnail", app.PutThumbnail)
-	authorized.POST("/comments", app.PostComment)
-	authorized.DELETE("/comments/:id", app.DeleteComment)
+	e.GET("/channels", app.GetChannels)
+	e.POST("/channels", app.PostChannel, userAuth)
+	e.GET("/channels/:id/permissions", app.GetChannelPermission, userAuth)
+	e.PUT("/channels/:id/picture", app.PutChannelPicture, userAuth)
+	e.POST("/videos", app.PostVideo, userAuth)
+	e.PUT("/videos/:id/thumbnail", app.PutThumbnail, userAuth)
+	e.POST("/comments", app.PostComment, userAuth)
+	e.DELETE("/comments/:id", app.DeleteComment, userAuth)
 
-	me := authorized.Group("/users/me")
+	me := e.Group("/users/me", userAuth)
 	me.GET("", app.GetMe)
 	me.PUT("", app.PutMe)
 	me.GET("/channels", app.GetMyChannels)
@@ -101,6 +102,11 @@ type App struct {
 			Password string `json:"password"`
 			Database int    `json:"database"`
 		} `json:"redis"`
+		Elasticsearch struct {
+			URL          string `json:"url"`
+			VideoIndex   string `json:"video_index"`
+			ChannelIndex string `json:"channel_index"`
+		}
 		AuthSignKey       string        `json:"auth_sign_key"`
 		UploadSignKey     string        `json:"upload_sign_key"`
 		ULIDConflictRetry int           `json:"ulid_conflict_retry"`
@@ -115,6 +121,7 @@ type App struct {
 		} `json:"websocket"`
 	}
 	db *sqlx.DB
+	es *elastic.Client
 	ws *ezsock.Server
 }
 
@@ -148,6 +155,14 @@ func NewApp() *App {
 			CheckOrigin: func(r *http.Request) bool { return true },
 		})
 	}
+
+	es, err := elastic.NewClient(elastic.SetURL(app.Config.Elasticsearch.URL))
+	if err != nil {
+		fmt.Println(app.Config.Elasticsearch.URL)
+		panic("Can not create Elasticsearch client")
+	}
+
+	app.es = es
 
 	return app
 }

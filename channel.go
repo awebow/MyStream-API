@@ -1,17 +1,20 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/disintegration/imaging"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/oklog/ulid/v2"
+	"github.com/olivere/elastic/v7"
 )
 
 type Channel struct {
@@ -49,6 +52,97 @@ func (app *App) GetChannel(c echo.Context) error {
 	}
 }
 
+func (app *App) GetChannels(c echo.Context) error {
+	var response struct {
+		Pagination *string   `json:"pagination"`
+		Data       []Channel `json:"data"`
+	}
+
+	pageToken := c.QueryParam("pagination")
+	limit := 20
+
+	var err error
+	if q := c.QueryParam("limit"); q != "" {
+		limit, err = strconv.Atoi(q)
+		if err != nil {
+			return err
+		}
+	}
+
+	if limit < 1 || limit > 100 {
+		return echo.NewHTTPError(http.StatusBadRequest, "value of 'limit' has to be 1~100")
+	}
+
+	if q := c.QueryParam("query"); q != "" {
+		search := app.es.Search().
+			Index(app.Config.Elasticsearch.ChannelIndex)
+
+		searchTime := time.Now()
+
+		if pageToken != "" {
+			page, err := parsePagination(pageToken)
+			if err != nil {
+				return err
+			}
+
+			searchTime = page.searchTime
+			search.SearchAfter(page.score, page.id.String())
+		}
+
+		search.Query(elastic.NewBoolQuery().Must(
+			elastic.NewRangeQuery("updated_at").Lte(searchTime),
+			elastic.NewMultiMatchQuery(q, "name^2", "description"),
+		)).
+			Size(limit).
+			Sort("_score", false).
+			Sort("_id", false)
+
+		res, err := search.Do(context.Background())
+
+		if err != nil {
+			return err
+		}
+
+		if res.Hits.TotalHits.Value == 0 {
+			return c.JSON(http.StatusOK, []Video{})
+		}
+
+		if length := len(res.Hits.Hits); length == limit {
+			last := res.Hits.Hits[length-1]
+			next := (&pagination{searchTime, *last.Score, ulid.MustParse(last.Id)}).tokenize()
+			response.Pagination = &next
+		}
+
+		stmt, err := app.db.Unsafe().Preparex("SELECT * FROM channels WHERE `id`=?")
+		if err != nil {
+			return err
+		}
+
+		response.Data = make([]Channel, len(res.Hits.Hits))
+		for i, hit := range res.Hits.Hits {
+			stmt.Get(&response.Data[i], hit.Id)
+		}
+	} else {
+		if pageToken != "" {
+			query := "SELECT * FROM channels WHERE `id` < ? ORDER BY `id` DESC LIMIT ?"
+			err = app.db.Unsafe().Select(&response.Data, query, pageToken, limit)
+		} else {
+			query := "SELECT * FROM channels ORDER BY `id` DESC LIMIT ?"
+			err = app.db.Unsafe().Select(&response.Data, query, limit)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		if length := len(response.Data); length == limit {
+			response.Pagination = &response.Data[length-1].ID
+		}
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
 func (app *App) GetChannelPermission(c echo.Context) error {
 	rows, err := app.db.Query("SELECT 1 FROM channels WHERE `owner`=?", GetUserID(c))
 	if err != nil {
@@ -70,8 +164,14 @@ func (app *App) PostChannel(c echo.Context) error {
 		return err
 	}
 
-	sql := "INSERT INTO channels (`id`, `name`, `description`, `owner`, `created_at`) VALUES (?, ?, ?, ?, ?)"
-	stmt, err := app.db.Prepare(sql)
+	tx, err := app.db.Beginx()
+	if err != nil {
+		return err
+	}
+
+	sql := "INSERT INTO channels " +
+		"(`id`, `name`, `description`, `owner`, `created_at`, `updated_at`) VALUES (?, ?, ?, ?, ?, ?)"
+	stmt, err := tx.Prepare(sql)
 	if err != nil {
 		return err
 	}
@@ -84,7 +184,7 @@ func (app *App) PostChannel(c echo.Context) error {
 	for i := 0; i < app.Config.ULIDConflictRetry+1; i++ {
 		id = ulid.MustNew(ulid.Timestamp(now), entropy)
 
-		_, err := stmt.Exec(id.String(), body.Name, body.Description, GetUserID(c), now)
+		_, err = stmt.Exec(id.String(), body.Name, body.Description, GetUserID(c), now, now)
 
 		if err == nil {
 			inserted = true
@@ -93,10 +193,27 @@ func (app *App) PostChannel(c echo.Context) error {
 	}
 
 	if inserted {
-		return c.JSON(http.StatusOK, echo.Map{"id": id})
-	} else {
-		return echo.ErrInternalServerError
+		_, err = app.es.Index().
+			Index(app.Config.Elasticsearch.ChannelIndex).
+			Id(id.String()).
+			BodyJson(echo.Map{
+				"name":        body.Name,
+				"description": body.Description,
+				"updated_at":  now,
+			}).
+			Do(context.Background())
+
+		if err == nil {
+			if err = tx.Commit(); err != nil {
+				return err
+			}
+
+			return c.JSON(http.StatusOK, echo.Map{"id": id})
+		}
 	}
+
+	tx.Rollback()
+	return err
 }
 
 func (app *App) PutChannelPicture(c echo.Context) error {

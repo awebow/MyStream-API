@@ -93,7 +93,7 @@ func (app *App) GetChannels(c echo.Context) error {
 			elastic.NewRangeQuery("updated_at").Lte(searchTime),
 			elastic.NewMultiMatchQuery(q, "name^2", "description"),
 		)).
-			Size(limit).
+			Size(limit+1).
 			Sort("_score", false).
 			Sort("_id", false)
 
@@ -107,8 +107,8 @@ func (app *App) GetChannels(c echo.Context) error {
 			return c.JSON(http.StatusOK, []Video{})
 		}
 
-		if length := len(res.Hits.Hits); length == limit {
-			last := res.Hits.Hits[length-1]
+		if length := len(res.Hits.Hits); length == limit+1 {
+			last := res.Hits.Hits[length-2]
 			next := (&pagination{searchTime, *last.Score, ulid.MustParse(last.Id)}).tokenize()
 			response.Pagination = &next
 		}
@@ -125,21 +125,24 @@ func (app *App) GetChannels(c echo.Context) error {
 	} else {
 		if pageToken != "" {
 			query := "SELECT * FROM channels WHERE `id` < ? ORDER BY `id` DESC LIMIT ?"
-			err = app.db.Unsafe().Select(&response.Data, query, pageToken, limit)
+			err = app.db.Unsafe().Select(&response.Data, query, pageToken, limit+1)
 		} else {
 			query := "SELECT * FROM channels ORDER BY `id` DESC LIMIT ?"
-			err = app.db.Unsafe().Select(&response.Data, query, limit)
+			err = app.db.Unsafe().Select(&response.Data, query, limit+1)
 		}
 
 		if err != nil {
 			return err
 		}
 
-		if length := len(response.Data); length == limit {
-			response.Pagination = &response.Data[length-1].ID
+		if length := len(response.Data); length == limit+1 {
+			response.Pagination = &response.Data[length-2].ID
 		}
 	}
 
+	if len(response.Data) > limit {
+		response.Data = response.Data[:limit]
+	}
 	return c.JSON(http.StatusOK, response)
 }
 

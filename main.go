@@ -36,6 +36,7 @@ func main() {
 		SigningKey: []byte(app.Config.UploadSignKey),
 		ContextKey: "uploadToken",
 	})
+	allowUnauth := app.AuthUserMiddleware(true)
 
 	e.GET("/", func(c echo.Context) error {
 		return c.String(http.StatusOK, "Hello, World!")
@@ -60,8 +61,8 @@ func main() {
 			return next(c)
 		}
 	})
-	e.GET("/videos/:id", app.GetVideo, app.AuthUserMiddleware(true))
-	e.GET("/videos/:id/comments", app.GetVideoComments, app.AuthUserMiddleware(true))
+	e.GET("/videos/:id", app.GetVideo, allowUnauth)
+	e.GET("/videos/:id/comments", app.GetVideoComments, allowUnauth)
 
 	e.GET("/channels", app.GetChannels)
 	e.POST("/channels", app.PostChannel, userAuth)
@@ -69,6 +70,9 @@ func main() {
 	e.PUT("/channels/:id/picture", app.PutChannelPicture, userAuth)
 	e.POST("/videos", app.PostVideo, userAuth)
 	e.PUT("/videos/:id/thumbnail", app.PutThumbnail, userAuth)
+	e.GET("/videos/:id/expressions", app.GetExpression, allowUnauth)
+	e.PUT("/videos/:id/expressions", app.PutExpression, userAuth)
+	e.DELETE("/videos/:id/expressions", app.DeleteExpression, userAuth)
 	e.POST("/comments", app.PostComment, userAuth)
 	e.DELETE("/comments/:id", app.DeleteComment, userAuth)
 

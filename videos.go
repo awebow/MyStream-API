@@ -97,6 +97,8 @@ type Video struct {
 	Description   string      `json:"description" db:"description"`
 	Duration      float32     `json:"duration" db:"duration"`
 	Status        VideoStatus `json:"status" db:"status"`
+	Likes         uint64      `json:"likes" db:"likes"`
+	Dislikes      uint64      `json:"dislikes" db:"dislikes"`
 	PostedAt      *time.Time  `json:"posted_at" db:"posted_at"`
 	UpdatedAt     time.Time   `json:"updated_at" db:"updated_at"`
 	DeactivatedAt *time.Time  `json:"deactivated_at" db:"deactivated_at"`
@@ -476,6 +478,236 @@ func (app *App) GetVideoComments(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, comments)
+}
+
+type Expression int
+
+const (
+	ExpressionLike Expression = iota
+	ExpressionDislike
+)
+
+func (e Expression) String() string {
+	switch e {
+	case ExpressionLike:
+		return "LIKE"
+	case ExpressionDislike:
+		return "DISLIKE"
+	}
+
+	return ""
+}
+
+func parseExpression(s string) (Expression, error) {
+	switch strings.ToUpper(s) {
+	case "LIKE":
+		return ExpressionLike, nil
+	case "DISLIKE":
+		return ExpressionDislike, nil
+	}
+
+	return 0, errors.New("invalid value for Expression")
+}
+
+func (e Expression) Value() (driver.Value, error) {
+	return e.String(), nil
+}
+
+func (e *Expression) Scan(src interface{}) (err error) {
+	switch src.(type) {
+	case string:
+		*e, err = parseExpression(src.(string))
+	case []byte:
+		*e, err = parseExpression(string(src.([]byte)))
+	default:
+		err = errors.New("invalid type for Expression")
+	}
+	return
+}
+
+func (e Expression) MarshalJSON() ([]byte, error) {
+	return json.Marshal(e.String())
+}
+
+func (e *Expression) UnmarshalJSON(data []byte) error {
+	var s string
+	err := json.Unmarshal(data, &s)
+	if err != nil {
+		return err
+	}
+
+	*e, err = parseExpression(s)
+	return err
+}
+
+type ExpressionInfo struct {
+	MyExpression *Expression `json:"my_expression"`
+	Likes        uint64      `json:"likes"`
+	Dislikes     uint64      `json:"dislikes"`
+}
+
+func (app *App) GetExpression(c echo.Context) error {
+	var response ExpressionInfo
+	tx, err := app.db.Beginx()
+	if err != nil {
+		return err
+	}
+
+	videoId := c.Param("id")
+	userId := GetUserID(c)
+
+	query := "SELECT `likes`, `dislikes` FROM videos WHERE `id`=? FOR UPDATE"
+	if err = tx.QueryRow(query, videoId).Scan(&response.Likes, &response.Dislikes); err != nil {
+		tx.Rollback()
+
+		if err == sql.ErrNoRows {
+			return NotFoundError("video")
+		} else {
+			return err
+		}
+	}
+
+	if userId != "" {
+		query = "SELECT `type` abc FROM expressions WHERE `video_id`=? AND `user_id`=? FOR UPDATE"
+		err = tx.Get(&response.MyExpression, query, videoId, userId)
+		if err != nil && err != sql.ErrNoRows {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, response)
+}
+
+func (app *App) PutExpression(c echo.Context) error {
+	var body struct {
+		Type Expression `json:"type"`
+	}
+	if err := c.Bind(&body); err != nil {
+		return err
+	}
+
+	var response ExpressionInfo
+
+	tx, err := app.db.Beginx()
+	if err != nil {
+		return err
+	}
+
+	videoId := c.Param("id")
+	userId := GetUserID(c)
+
+	query := "SELECT `likes`, `dislikes` FROM videos WHERE `id`=? FOR UPDATE"
+	if err = tx.QueryRow(query, videoId).Scan(&response.Likes, &response.Dislikes); err != nil {
+		tx.Rollback()
+
+		if err == sql.ErrNoRows {
+			return NotFoundError("video")
+		} else {
+			return err
+		}
+	}
+
+	var exp Expression
+	query = "SELECT `type` FROM expressions WHERE `video_id`=? AND `user_id`=? FOR UPDATE"
+	if err = tx.Get(&exp, query, videoId, userId); err == nil {
+		if exp == body.Type {
+			tx.Commit()
+			response.MyExpression = &exp
+			return c.JSON(http.StatusOK, response)
+		} else if exp == ExpressionLike {
+			response.Likes--
+		} else {
+			response.Dislikes--
+		}
+	} else if err != sql.ErrNoRows {
+		tx.Rollback()
+		return err
+	}
+
+	query = "INSERT INTO expressions VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `type`=?"
+	if _, err = tx.Exec(query, videoId, userId, body.Type, body.Type); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if body.Type == ExpressionLike {
+		response.Likes++
+	} else {
+		response.Dislikes++
+	}
+
+	query = "UPDATE videos SET `likes`=?, `dislikes`=? WHERE `id`=?"
+	if _, err = tx.Exec(query, response.Likes, response.Dislikes, videoId); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+
+	response.MyExpression = &body.Type
+	return c.JSON(http.StatusOK, response)
+}
+
+func (app *App) DeleteExpression(c echo.Context) error {
+	var response ExpressionInfo
+
+	videoId := c.Param("id")
+	userId := GetUserID(c)
+
+	tx, err := app.db.Beginx()
+	if err != nil {
+		return err
+	}
+
+	query := "SELECT `likes`, `dislikes` FROM videos WHERE `id`=? FOR UPDATE"
+	if err = tx.QueryRow(query, videoId).Scan(&response.Likes, &response.Dislikes); err != nil {
+		tx.Rollback()
+
+		if err == sql.ErrNoRows {
+			return NotFoundError("video")
+		} else {
+			return err
+		}
+	}
+
+	var exp Expression
+	query = "SELECT `type` FROM expressions WHERE `video_id`=? AND `user_id`=? FOR UPDATE"
+	if err = tx.Get(&exp, query, videoId, userId); err != nil {
+		tx.Rollback()
+
+		if err == sql.ErrNoRows {
+			return NotFoundError("expression")
+		} else {
+			return err
+		}
+	}
+
+	query = "DELETE FROM expressions WHERE `video_id`=? AND `user_id`=?"
+	if _, err = tx.Exec(query, videoId, userId); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if exp == ExpressionLike {
+		response.Likes--
+	} else {
+		response.Dislikes--
+	}
+
+	query = "UPDATE videos SET `likes`=?, `dislikes`=? WHERE `id`=?"
+	if _, err = tx.Exec(query, response.Likes, response.Dislikes, videoId); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	tx.Commit()
+	return c.JSON(http.StatusOK, response)
 }
 
 type Comment struct {

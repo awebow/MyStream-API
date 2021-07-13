@@ -139,10 +139,10 @@ func (app *App) GetVideo(c echo.Context) error {
 }
 
 func (app *App) GetVideos(c echo.Context) error {
-	var response struct {
+	response := struct {
 		Pagination *string `json:"pagination"`
 		Data       []Video `json:"data"`
-	}
+	}{Data: []Video{}}
 
 	pageToken := c.QueryParam("pagination")
 	limit := 20
@@ -190,7 +190,7 @@ func (app *App) GetVideos(c echo.Context) error {
 		}
 
 		if res.Hits.TotalHits.Value == 0 {
-			return c.JSON(http.StatusOK, []Video{})
+			return c.JSON(http.StatusOK, response)
 		}
 
 		if length := len(res.Hits.Hits); length == limit+1 {
@@ -206,29 +206,103 @@ func (app *App) GetVideos(c echo.Context) error {
 
 		response.Data = make([]Video, len(res.Hits.Hits))
 		for i, hit := range res.Hits.Hits {
-			stmt.Get(&response.Data[i], hit.Id)
+			if i < limit {
+				stmt.Get(&response.Data[i], hit.Id)
+			}
 		}
 	} else {
-		if pageToken != "" {
-			query := "SELECT * FROM videos WHERE `id` < ? ORDER BY `id` DESC LIMIT ?"
-			err = app.db.Unsafe().Select(&response.Data, query, pageToken, limit+1)
+		userId := GetUserID(c)
+		if userId != "" {
+			var rows []struct {
+				Video
+				Subscription bool `db:"subscription"`
+			}
+
+			var lastIds []string
+			if pageToken == "" {
+				lastIds = []string{"", ""}
+			} else {
+				lastIds = strings.Split(pageToken, ",")
+				if len(lastIds) != 2 {
+					return echo.NewHTTPError(http.StatusBadRequest, "invalid pagination token")
+				}
+			}
+
+			err = app.db.Unsafe().Select(&rows,
+				`SELECT * FROM
+					((SELECT v.*, UNIX_TIMESTAMP(posted_at)+? score, 1 subscription
+						FROM videos v JOIN subscriptions s ON v.channel_id=s.channel_id
+						WHERE
+							s.user_id=?
+							AND (?='' OR v.id < ?)
+							AND v.status='ACTIVE'
+						ORDER BY v.id DESC
+						LIMIT ?)
+					UNION
+					(SELECT v.*, UNIX_TIMESTAMP(posted_at) score, 0 subscription
+						FROM videos v LEFT JOIN subscriptions s ON v.channel_id=s.channel_id AND s.user_id=?
+						WHERE s.user_id IS NULL AND v.status='ACTIVE'
+						AND (?='' OR v.id < ?)
+						ORDER BY v.id DESC LIMIT ?)) a
+				GROUP BY id
+				ORDER BY score DESC
+				LIMIT ?;`,
+				app.Config.SubscriptionBonus,
+				userId, lastIds[0], lastIds[0], limit+1,
+				userId, lastIds[1], lastIds[1], limit+1,
+				limit+1,
+			)
+
+			if err != nil {
+				return err
+			}
+
+			lastSub := ""
+			lastRecent := ""
+			for i, row := range rows {
+				if i < limit {
+					if row.Subscription {
+						lastSub = row.ID
+					} else {
+						lastRecent = row.ID
+					}
+
+					response.Data = append(response.Data, row.Video)
+				}
+			}
+
+			if lastSub == "" {
+				lastSub = lastIds[0]
+			}
+
+			if lastRecent == "" {
+				lastRecent = lastIds[1]
+			}
+
+			if len(rows) == limit+1 {
+				response.Pagination = new(string)
+				*response.Pagination = lastSub + "," + lastRecent
+			}
 		} else {
-			query := "SELECT * FROM videos ORDER BY `id` DESC LIMIT ?"
-			err = app.db.Unsafe().Select(&response.Data, query, limit+1)
-		}
+			if pageToken != "" {
+				query := "SELECT * FROM videos WHERE `id` < ? ORDER BY `id` DESC LIMIT ?"
+				err = app.db.Unsafe().Select(&response.Data, query, pageToken, limit+1)
+			} else {
+				query := "SELECT * FROM videos ORDER BY `id` DESC LIMIT ?"
+				err = app.db.Unsafe().Select(&response.Data, query, limit+1)
+			}
 
-		if err != nil {
-			return err
-		}
+			if err != nil {
+				return err
+			}
 
-		if length := len(response.Data); length == limit+1 {
-			response.Pagination = &response.Data[length-2].ID
+			if len(response.Data) == limit+1 {
+				response.Pagination = &response.Data[limit-1].ID
+				response.Data = response.Data[:limit]
+			}
 		}
 	}
 
-	if len(response.Data) == limit+1 {
-		response.Data = response.Data[:limit]
-	}
 	return c.JSON(http.StatusOK, response)
 }
 

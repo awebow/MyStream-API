@@ -48,7 +48,7 @@ func main() {
 	e.POST("/users/tokens", app.PostToken)
 	e.GET("/channels/:id", app.GetChannel)
 	e.GET("/channels/:id/videos", app.GetChannelVideos)
-	e.GET("/videos", app.GetVideos)
+	e.GET("/videos", app.GetVideos, allowUnauth)
 	e.PUT("/videos/:id", app.PutVideo, func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			userErr := userAuth(func(echo.Context) error { return nil })(c)
@@ -65,9 +65,13 @@ func main() {
 	e.GET("/videos/:id/comments", app.GetVideoComments, allowUnauth)
 
 	e.GET("/channels", app.GetChannels)
+	e.GET("/channels/subscribed", app.GetSubscribedChannels, userAuth)
 	e.POST("/channels", app.PostChannel, userAuth)
 	e.GET("/channels/:id/permissions", app.GetChannelPermission, userAuth)
 	e.PUT("/channels/:id/picture", app.PutChannelPicture, userAuth)
+	e.GET("/channels/:id/subscriptions", app.GetSubscription, userAuth)
+	e.POST("/channels/:id/subscriptions", app.PostSubscription, userAuth)
+	e.DELETE("/channels/:id/subscriptions", app.DeleteSubscription, userAuth)
 	e.POST("/videos", app.PostVideo, userAuth)
 	e.PUT("/videos/:id/thumbnail", app.PutThumbnail, userAuth)
 	e.GET("/videos/:id/expressions", app.GetExpression, allowUnauth)
@@ -123,6 +127,7 @@ type App struct {
 			PingInterval int  `json:"ping_interval"`
 			PongTimeout  int  `json:"pong_timeout"`
 		} `json:"websocket"`
+		SubscriptionBonus int64 `json:"subscription_bonus"`
 	}
 	db *sqlx.DB
 	es *elastic.Client

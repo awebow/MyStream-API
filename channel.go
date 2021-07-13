@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/disintegration/imaging"
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/oklog/ulid/v2"
@@ -22,6 +23,8 @@ type Channel struct {
 	Name          string     `json:"name" db:"name"`
 	Description   string     `json:"description" db:"description"`
 	Picture       *string    `json:"picture" db:"picture"`
+	Subscribers   uint64     `json:"subscribers" db:"subscribers"`
+	Videos        uint64     `json:"videos" db:"videos"`
 	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
 	DeactivatedAt *time.Time `json:"deactivated_at" db:"deactivated_at"`
 }
@@ -53,10 +56,10 @@ func (app *App) GetChannel(c echo.Context) error {
 }
 
 func (app *App) GetChannels(c echo.Context) error {
-	var response struct {
+	response := struct {
 		Pagination *string   `json:"pagination"`
 		Data       []Channel `json:"data"`
-	}
+	}{Data: []Channel{}}
 
 	pageToken := c.QueryParam("pagination")
 	limit := 20
@@ -104,7 +107,7 @@ func (app *App) GetChannels(c echo.Context) error {
 		}
 
 		if res.Hits.TotalHits.Value == 0 {
-			return c.JSON(http.StatusOK, []Video{})
+			return c.JSON(http.StatusOK, response)
 		}
 
 		if length := len(res.Hits.Hits); length == limit+1 {
@@ -138,6 +141,56 @@ func (app *App) GetChannels(c echo.Context) error {
 		if length := len(response.Data); length == limit+1 {
 			response.Pagination = &response.Data[length-2].ID
 		}
+	}
+
+	if len(response.Data) > limit {
+		response.Data = response.Data[:limit]
+	}
+	return c.JSON(http.StatusOK, response)
+}
+
+func (app *App) GetSubscribedChannels(c echo.Context) error {
+	var response struct {
+		Pagination *string   `json:"pagination"`
+		Data       []Channel `json:"data"`
+	}
+
+	pageToken := c.QueryParam("pagination")
+	limit := 20
+	userId := GetUserID(c)
+
+	var err error
+	if q := c.QueryParam("limit"); q != "" {
+		limit, err = strconv.Atoi(q)
+		if err != nil {
+			return err
+		}
+	}
+
+	if limit < 1 || limit > 100 {
+		return echo.NewHTTPError(http.StatusBadRequest, "value of 'limit' has to be 1~100")
+	}
+
+	if pageToken != "" {
+		query :=
+			`SELECT c.* FROM channels c JOIN subscriptions s ON c.id=s.channel_id
+				WHERE s.user_id=? AND c.id < ?
+				ORDER BY c.id DESC LIMIT ?`
+		err = app.db.Unsafe().Select(&response.Data, query, userId, pageToken, limit+1)
+	} else {
+		query :=
+			`SELECT c.* FROM channels c JOIN subscriptions s ON c.id=s.channel_id
+				WHERE s.user_id=?
+				ORDER BY id DESC LIMIT ?`
+		err = app.db.Unsafe().Select(&response.Data, query, userId, limit+1)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if length := len(response.Data); length == limit+1 {
+		response.Pagination = &response.Data[length-2].ID
 	}
 
 	if len(response.Data) > limit {
@@ -307,6 +360,129 @@ func (app *App) GetChannelVideos(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, videos)
+}
+
+func (app *App) GetSubscription(c echo.Context) error {
+	var response struct {
+		Subscribed  bool   `json:"subscribed"`
+		Subscribers uint64 `json:"subscribers"`
+	}
+
+	userId := GetUserID(c)
+	channelId := c.Param("id")
+
+	tx, err := app.db.Beginx()
+	if err != nil {
+		return err
+	}
+
+	query := "SELECT `subscribers` FROM channels WHERE `id`=?"
+	err = tx.Get(&response.Subscribers, query, channelId)
+	if err != nil {
+		return err
+	}
+
+	query = "SELECT 1 FROM subscriptions WHERE `user_id`=? AND `channel_id`=?"
+	rows, err := tx.Query(query, userId, channelId)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer rows.Close()
+	response.Subscribed = rows.Next()
+
+	tx.Commit()
+	return c.JSON(http.StatusOK, response)
+}
+
+func (app *App) PostSubscription(c echo.Context) error {
+	var response struct {
+		Subscribed  bool   `json:"subscribed"`
+		Subscribers uint64 `json:"subscribers"`
+	}
+
+	userId := GetUserID(c)
+	channelId := c.Param("id")
+
+	tx, err := app.db.Beginx()
+	if err != nil {
+		return err
+	}
+
+	if _, err = tx.Exec("INSERT INTO subscriptions VALUES (?, ?)", userId, channelId); err != nil {
+		tx.Rollback()
+
+		if v, ok := err.(*mysql.MySQLError); ok && v.Number == 1062 {
+			return echo.NewHTTPError(http.StatusConflict, "already subscribed")
+		} else if ok && (v.Number == 1216 || v.Number == 1452 || v.Number == 1406) {
+			return NotFoundError("channel")
+		} else {
+			return err
+		}
+	}
+
+	query := "UPDATE channels SET `subscribers`=`subscribers`+1 WHERE `id`=?"
+	if _, err = tx.Exec(query, channelId); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+
+	response.Subscribed = true
+	query = "SELECT `subscribers` FROM channels WHERE `id`=?"
+	if err = app.db.Get(&response.Subscribers, query, channelId); err != nil {
+		return err
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
+func (app *App) DeleteSubscription(c echo.Context) error {
+	var response struct {
+		Subscribed  bool   `json:"subscribed"`
+		Subscribers uint64 `json:"subscribers"`
+	}
+
+	userId := GetUserID(c)
+	channelId := c.Param("id")
+
+	tx, err := app.db.Beginx()
+	if err != nil {
+		return err
+	}
+
+	query := "DELETE FROM subscriptions WHERE `user_id`=? AND `channel_id`=?"
+	if res, err := tx.Exec(query, userId, channelId); err != nil {
+		tx.Rollback()
+		return err
+	} else if rows, err := res.RowsAffected(); err != nil {
+		tx.Rollback()
+		return err
+	} else if rows == 0 {
+		tx.Rollback()
+		return NotFoundError("subscription")
+	}
+
+	query = "UPDATE channels SET `subscribers`=`subscribers`-1 WHERE `id`=?"
+	if _, err = tx.Exec(query, channelId); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+
+	response.Subscribed = false
+	query = "SELECT `subscribers` FROM channels WHERE `id`=?"
+	if err = app.db.Get(&response.Subscribers, query, channelId); err != nil {
+		return err
+	}
+
+	return c.JSON(http.StatusOK, response)
 }
 
 func (app *App) SelectChannelOwnerID(channelID string) (string, error) {

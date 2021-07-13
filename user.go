@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -146,19 +147,44 @@ func (app *App) GetEmail(c echo.Context) error {
 }
 
 func (app *App) GetMyChannels(c echo.Context) error {
-	rows, err := app.db.Unsafe().Queryx("SELECT * FROM channels WHERE `owner`=?", GetUserID(c))
+	var response struct {
+		Pagination *string   `json:"pagination"`
+		Data       []Channel `json:"data"`
+	}
+
+	pageToken := c.QueryParam("pagination")
+	limit := 20
+
+	var err error
+	if q := c.QueryParam("limit"); q != "" {
+		limit, err = strconv.Atoi(q)
+		if err != nil {
+			return err
+		}
+	}
+
+	if limit < 1 || limit > 100 {
+		return echo.NewHTTPError(http.StatusBadRequest, "value of 'limit' has to be 1~100")
+	}
+
+	if pageToken != "" {
+		query := "SELECT * FROM channels WHERE `owner`=? AND `id` < ? ORDER BY `id` DESC LIMIT ?"
+		err = app.db.Unsafe().Select(&response.Data, query, GetUserID(c), pageToken, limit+1)
+	} else {
+		query := "SELECT * FROM channels WHERE `owner`=? ORDER BY `id` DESC LIMIT ?"
+		err = app.db.Unsafe().Select(&response.Data, query, GetUserID(c), limit+1)
+	}
+
 	if err != nil {
 		return err
 	}
 
-	channels := []Channel{}
-	for rows.Next() {
-		channel := Channel{}
-		rows.StructScan(&channel)
-		channels = append(channels, channel)
+	if len(response.Data) > limit {
+		response.Pagination = &response.Data[limit-1].ID
+		response.Data = response.Data[:limit]
 	}
 
-	return c.JSON(http.StatusOK, channels)
+	return c.JSON(http.StatusOK, response)
 }
 
 func (app *App) PostUser(c echo.Context) error {

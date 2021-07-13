@@ -17,7 +17,6 @@ import (
 
 	jwtgo "github.com/dgrijalva/jwt-go"
 	"github.com/disintegration/imaging"
-	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwt"
@@ -106,17 +105,11 @@ type Video struct {
 
 func (app *App) SelectVideo(id string) (v *Video, err error) {
 	v = &Video{}
-	var rows *sqlx.Rows
-	rows, err = app.db.Unsafe().Queryx("SELECT * FROM videos WHERE `id`=?", id)
-	if err != nil {
-		return
-	}
-
-	if rows.Next() {
-		err = rows.StructScan(v)
-	} else {
+	err = app.db.Unsafe().Get(v, "SELECT * FROM videos WHERE `id`=?", id)
+	if err == sql.ErrNoRows {
 		err = NotFoundError("video")
 	}
+
 	return
 }
 
@@ -377,19 +370,18 @@ func (app *App) PutVideo(c echo.Context) error {
 	editMeta := false
 
 	if userID := GetUserID(c); userID != "" {
-		sql := "SELECT c.`owner` FROM videos v JOIN channels c ON v.`channel_id`=c.`id` WHERE v.`id`=?"
-		rows, err := app.db.Query(sql, videoID)
-		if err != nil {
-			return echo.ErrUnauthorized
+		var owner string
+
+		query := "SELECT c.`owner` FROM videos v JOIN channels c ON v.`channel_id`=c.`id` WHERE v.`id`=?"
+		err := app.db.Get(&owner, query, videoID)
+		if err == sql.ErrNoRows {
+			return NotFoundError("video")
+		} else if err != nil {
+			return err
 		}
 
-		if rows.Next() {
-			var owner string
-			rows.Scan(&owner)
-
-			if owner != userID {
-				return echo.NewHTTPError(http.StatusForbidden, "you don't have permission on this video")
-			}
+		if owner != userID {
+			return echo.NewHTTPError(http.StatusForbidden, "you don't have permission on this video")
 		}
 	} else if token, ok := c.Get("uploadToken").(*jwtgo.Token); ok {
 		claims := token.Claims.(jwtgo.MapClaims)
@@ -436,12 +428,17 @@ func (app *App) PutVideo(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "no available property")
 	}
 
-	sql := "UPDATE videos" +
+	query := "UPDATE videos" +
 		" SET " + strings.Join(params, ",") + ", `updated_at`=CURRENT_TIMESTAMP()" +
 		" WHERE `id`=?"
-	_, err := app.db.Exec(sql, append(vals, videoID)...)
+	res, err := app.db.Exec(query, append(vals, videoID)...)
 	if err != nil {
 		return err
+	}
+	if rows, err := res.RowsAffected(); err != nil {
+		return err
+	} else if rows == 0 {
+		return NotFoundError("video")
 	}
 
 	if video, err := app.SelectVideo(videoID); err == nil {
@@ -472,19 +469,17 @@ func (app *App) PutVideo(c echo.Context) error {
 func (app *App) PutThumbnail(c echo.Context) error {
 	videoID := c.Param("id")
 
-	sql := "SELECT c.`owner` FROM videos v JOIN channels c ON v.`channel_id`=c.`id` WHERE v.`id`=?"
-	rows, err := app.db.Query(sql, videoID)
-	if err != nil {
-		return echo.ErrUnauthorized
+	var owner string
+
+	query := "SELECT c.`owner` FROM videos v JOIN channels c ON v.`channel_id`=c.`id` WHERE v.`id`=?"
+	if err := app.db.Get(&owner, query, videoID); err == sql.ErrNoRows {
+		return NotFoundError("video")
+	} else if err != nil {
+		return err
 	}
 
-	if rows.Next() {
-		var owner string
-		rows.Scan(&owner)
-
-		if owner != GetUserID(c) {
-			return echo.NewHTTPError(http.StatusForbidden, "you don't have permission on this video")
-		}
+	if owner != GetUserID(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "you don't have permission on this video")
 	}
 
 	header, err := c.FormFile("file")
@@ -538,6 +533,7 @@ func (app *App) GetVideoComments(c echo.Context) error {
 	} else if !rows.Next() {
 		return NotFoundError("video")
 	}
+	rows.Close()
 
 	rows, err = app.db.Unsafe().Queryx("SELECT * FROM comments WHERE `video_id`=?", videoID)
 	if err != nil {
@@ -795,17 +791,11 @@ type Comment struct {
 
 func (app *App) SelectComment(id string) (c *Comment, err error) {
 	c = &Comment{}
-	var rows *sqlx.Rows
-	rows, err = app.db.Unsafe().Queryx("SELECT * FROM comments WHERE `id`=?", id)
-	if err != nil {
-		return
-	}
-
-	if rows.Next() {
-		err = rows.StructScan(c)
-	} else {
+	err = app.db.Unsafe().Get(c, "SELECT * FROM comments WHERE `id`=?", id)
+	if err == sql.ErrNoRows {
 		err = NotFoundError("comment")
 	}
+
 	return
 }
 
@@ -858,20 +848,18 @@ func (app *App) PostComment(c echo.Context) error {
 
 func (app *App) DeleteComment(c echo.Context) error {
 	commentID := c.Param("id")
-	rows, err := app.db.Query("SELECT `writer_id` FROM comments WHERE `id`=?", commentID)
+
+	var writer string
+	err := app.db.Get(&writer, "SELECT `writer_id` FROM comments WHERE `id`=?", commentID)
+	if err == sql.ErrNoRows {
+		return NotFoundError("comment")
+	}
 	if err != nil {
 		return err
 	}
 
-	if rows.Next() {
-		var writer string
-		rows.Scan(&writer)
-
-		if writer != GetUserID(c) {
-			return echo.NewHTTPError(http.StatusForbidden, "you don't have permission on this comment")
-		}
-	} else {
-		return NotFoundError("comment")
+	if writer != GetUserID(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "you don't have permission on this comment")
 	}
 
 	sql := "DELETE FROM comments WHERE `id`=?"

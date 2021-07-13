@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/disintegration/imaging"
 	"github.com/go-sql-driver/mysql"
-	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwt"
@@ -32,37 +32,30 @@ type User struct {
 
 func (app *App) SelectUser(id string) (u *User, err error) {
 	u = &User{}
-	var rows *sqlx.Rows
-	rows, err = app.db.Unsafe().Queryx("SELECT * FROM users WHERE `id`=?", id)
-	if err != nil {
-		return
-	}
-
-	if rows.Next() {
-		err = rows.StructScan(u)
-	} else {
+	err = app.db.Unsafe().Get(u, "SELECT * FROM users WHERE `id`=?", id)
+	if err == sql.ErrNoRows {
 		err = NotFoundError("user")
 	}
+
 	return
 }
 
 func (app *App) GetUser(c echo.Context) error {
-	sql := "SELECT `id`, `name`, `picture` FROM users WHERE `id`=?"
-	rows, err := app.db.Queryx(sql, c.Param("id"))
-	if err != nil {
+	var response struct {
+		ID      string  `json:"id" db:"id"`
+		Name    string  `json:"name" db:"name"`
+		Picture *string `json:"picture" db:"picture"`
+	}
+
+	query := "SELECT `id`, `name`, `picture` FROM users WHERE `id`=?"
+	err := app.db.Get(&response, query, c.Param("id"))
+	if err == sql.ErrNoRows {
+		return NotFoundError("user")
+	} else if err != nil {
 		return err
 	}
 
-	if rows.Next() {
-		blob, err := RowToJSON(rows)
-		if err != nil {
-			return nil
-		}
-
-		return c.JSONBlob(http.StatusOK, blob)
-	} else {
-		return NotFoundError("user")
-	}
+	return c.JSON(http.StatusOK, response)
 }
 
 func (app *App) GetMe(c echo.Context) error {
@@ -103,15 +96,14 @@ func (app *App) PutMe(c echo.Context) error {
 
 	var password *[]byte
 	if body.Password != nil {
-		rows, err := app.db.Query("SELECT `email`, `password` FROM users WHERE `id`=?", userID)
-		if err != nil {
-			return nil
-		}
-
 		var email string
 		var currentPassword []byte
-		rows.Next()
-		rows.Scan(&email, &currentPassword)
+
+		query := "SELECT `email`, `password` FROM users WHERE `id`=?"
+		err := app.db.QueryRow(query, userID).Scan(&email, &currentPassword)
+		if err != nil {
+			return err
+		}
 
 		if !bytes.Equal(currentPassword, hashPassword(email, *body.CurrentPassword)) {
 			return echo.NewHTTPError(http.StatusUnauthorized, "wrong current password")
@@ -138,6 +130,7 @@ func (app *App) GetEmail(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
 
 	if rows.Next() {
 		return c.JSON(http.StatusOK, echo.Map{"email": email})
@@ -309,7 +302,7 @@ func (app *App) PutUserPicture(c echo.Context) error {
 		return err
 	}
 
-	_, err = app.db.Query("UPDATE users SET `picture`=? WHERE `id`=?", fileName, userID)
+	_, err = app.db.Exec("UPDATE users SET `picture`=? WHERE `id`=?", fileName, userID)
 	if err != nil {
 		return err
 	}
@@ -334,28 +327,25 @@ func (app *App) PostToken(c echo.Context) error {
 		return err
 	}
 
-	sql := "SELECT `id` FROM users WHERE `email`=? AND `password`=?"
-	rows, err := app.db.Query(sql, body.Email, hashPassword(body.Email, body.Password))
+	var id string
+
+	query := "SELECT `id` FROM users WHERE `email`=? AND `password`=?"
+	err := app.db.Get(&id, query, body.Email, hashPassword(body.Email, body.Password))
+	if err == sql.ErrNoRows {
+		return echo.ErrUnauthorized
+	} else if err != nil {
+		return err
+	}
+
+	token := jwt.New()
+	token.Set("user_id", id)
+
+	signed, err := jwt.Sign(token, jwa.HS256, []byte(app.Config.AuthSignKey))
 	if err != nil {
 		return err
 	}
 
-	if rows.Next() {
-		var id string
-		rows.Scan(&id)
-
-		token := jwt.New()
-		token.Set("user_id", id)
-
-		signed, err := jwt.Sign(token, jwa.HS256, []byte(app.Config.AuthSignKey))
-		if err != nil {
-			return err
-		}
-
-		return c.JSON(http.StatusOK, echo.Map{"token": string(signed)})
-	} else {
-		return echo.ErrUnauthorized
-	}
+	return c.JSON(http.StatusOK, echo.Map{"token": string(signed)})
 }
 
 func (app *App) AuthUser(bearer string) (string, error) {

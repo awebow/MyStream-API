@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
@@ -37,6 +38,7 @@ func (app *App) SelectChannel(id string) (channel *Channel, err error) {
 	if err != nil {
 		return
 	}
+	defer rows.Close()
 
 	if rows.Next() {
 		err = rows.StructScan(&channel)
@@ -204,6 +206,7 @@ func (app *App) GetChannelPermission(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
 
 	return c.JSON(http.StatusOK, echo.Map{"ownership": rows.Next()})
 }
@@ -326,7 +329,7 @@ func (app *App) PutChannelPicture(c echo.Context) error {
 		return err
 	}
 
-	_, err = app.db.Query("UPDATE channels SET `picture`=? WHERE `id`=?", fileName, channelID)
+	_, err = app.db.Exec("UPDATE channels SET `picture`=? WHERE `id`=?", fileName, channelID)
 	if err != nil {
 		return err
 	}
@@ -388,8 +391,8 @@ func (app *App) GetSubscription(c echo.Context) error {
 		tx.Rollback()
 		return err
 	}
-	defer rows.Close()
 	response.Subscribed = rows.Next()
+	rows.Close()
 
 	tx.Commit()
 	return c.JSON(http.StatusOK, response)
@@ -486,18 +489,13 @@ func (app *App) DeleteSubscription(c echo.Context) error {
 }
 
 func (app *App) SelectChannelOwnerID(channelID string) (string, error) {
-	rows, err := app.db.Query("SELECT `owner` FROM channels WHERE `id`=?", channelID)
-	if err != nil {
-		return "", err
-	}
-
-	if rows.Next() {
-		var ownerID string
-		err = rows.Scan(&ownerID)
-		return ownerID, err
-	} else {
+	var ownerID string
+	err := app.db.Get(&ownerID, "SELECT `owner` FROM channels WHERE `id`=?", channelID)
+	if err == sql.ErrNoRows {
 		return "", NotFoundError("channel")
 	}
+
+	return ownerID, err
 }
 
 func (app *App) CheckChannelAuth(channelID string, userID string) error {

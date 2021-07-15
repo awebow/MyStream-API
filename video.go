@@ -523,7 +523,27 @@ func (app *App) PutThumbnail(c echo.Context) error {
 }
 
 func (app *App) GetVideoComments(c echo.Context) error {
+	var response struct {
+		Pagination *string   `json:"pagination"`
+		Data       []Comment `json:"data"`
+	}
+
 	videoID := c.Param("id")
+
+	pageToken := c.QueryParam("pagination")
+	limit := 20
+
+	var err error
+	if q := c.QueryParam("limit"); q != "" {
+		limit, err = strconv.Atoi(q)
+		if err != nil {
+			return err
+		}
+	}
+
+	if limit < 1 || limit > 100 {
+		return echo.NewHTTPError(http.StatusBadRequest, "value of 'limit' has to be 1~100")
+	}
 
 	sql := "SELECT 1 FROM videos v JOIN channels c ON c.`id`=v.`channel_id` " +
 		"WHERE v.`id`=? AND (v.`status`='ACTIVE' OR (v.`status`='ENCODING' AND c.`owner`=?))"
@@ -535,19 +555,23 @@ func (app *App) GetVideoComments(c echo.Context) error {
 	}
 	rows.Close()
 
-	rows, err = app.db.Unsafe().Queryx("SELECT * FROM comments WHERE `video_id`=?", videoID)
+	if pageToken == "" {
+		query := "SELECT * FROM comments WHERE `video_id`=? ORDER BY `id` DESC LIMIT ?"
+		err = app.db.Unsafe().Select(&response.Data, query, videoID, limit+1)
+	} else {
+		query := "SELECT * FROM comments WHERE `video_id`=? AND `id` < ? ORDER BY `id` DESC LIMIT ?"
+		err = app.db.Unsafe().Select(&response.Data, query, videoID, pageToken, limit+1)
+	}
 	if err != nil {
 		return err
 	}
 
-	comments := []Comment{}
-	for rows.Next() {
-		comment := Comment{}
-		rows.StructScan(&comment)
-		comments = append(comments, comment)
+	if len(response.Data) == limit+1 {
+		response.Pagination = &response.Data[limit-1].ID
+		response.Data = response.Data[:limit]
 	}
 
-	return c.JSON(http.StatusOK, comments)
+	return c.JSON(http.StatusOK, response)
 }
 
 type Expression int

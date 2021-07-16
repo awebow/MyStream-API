@@ -93,12 +93,12 @@ func main() {
 		e.GET("/ws", app.ServeWebsocket)
 	}
 
-	e.Logger.Fatal(e.Start(app.Config.Listen[0]))
+	e.Logger.Fatal(e.Start(app.Config.Listen))
 }
 
 type App struct {
 	Config struct {
-		Listen   []string `json:"listen"`
+		Listen   string `json:"listen"`
 		Database struct {
 			Host     string `json:"host"`
 			User     string `json:"user"`

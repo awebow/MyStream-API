@@ -115,6 +115,7 @@ type App struct {
 			VideoIndex   string `json:"video_index"`
 			ChannelIndex string `json:"channel_index"`
 		}
+		AllowUserChannel  bool   `json:"allow_user_channel"`
 		AuthSignKey       string `json:"auth_sign_key"`
 		UploadSignKey     string `json:"upload_sign_key"`
 		ULIDConflictRetry int    `json:"ulid_conflict_retry"`

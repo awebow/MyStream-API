@@ -223,9 +223,25 @@ func (app *App) PostChannel(c echo.Context) error {
 		return err
 	}
 
+	userId := GetUserID(c)
+
 	tx, err := app.db.Beginx()
 	if err != nil {
 		return err
+	}
+
+	if !app.Config.AllowUserChannel {
+		query := "SELECT 1 FROM users WHERE `id`=? AND `is_admin`=1"
+		rows, err := tx.Query(query, userId)
+		if err != nil {
+			return err
+		}
+
+		exist := rows.Next()
+		rows.Close()
+		if !exist {
+			return echo.NewHTTPError(http.StatusForbidden, "you don't have permission to create a channel")
+		}
 	}
 
 	sql := "INSERT INTO channels " +
@@ -243,7 +259,7 @@ func (app *App) PostChannel(c echo.Context) error {
 	for i := 0; i < app.Config.ULIDConflictRetry+1; i++ {
 		id = ulid.MustNew(ulid.Timestamp(now), entropy)
 
-		_, err = stmt.Exec(id.String(), body.Name, body.Description, GetUserID(c), now, now)
+		_, err = stmt.Exec(id.String(), body.Name, body.Description, userId, now, now)
 
 		if err == nil {
 			inserted = true

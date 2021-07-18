@@ -325,7 +325,7 @@ func (app *App) PutChannelPicture(c echo.Context) error {
 	entropy := ulid.Monotonic(rand.New(rand.NewSource(now.UnixNano())), 0)
 	fileName := "c" + channelID + ulid.MustNew(ulid.Timestamp(now), entropy).String()
 
-	if err = app.StoreFile(dir, "images/"+fileName); err != nil {
+	if err = app.imageStorage.storeFile(dir, fileName); err != nil {
 		return err
 	}
 

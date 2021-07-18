@@ -115,23 +115,28 @@ type App struct {
 			VideoIndex   string `json:"video_index"`
 			ChannelIndex string `json:"channel_index"`
 		}
-		AuthSignKey       string        `json:"auth_sign_key"`
-		UploadSignKey     string        `json:"upload_sign_key"`
-		ULIDConflictRetry int           `json:"ulid_conflict_retry"`
-		StoreCommand      []string      `json:"store_cmd"`
-		Thumbnail         ImageOption   `json:"thumbnail"`
-		UserPicture       []ImageOption `json:"user_picture"`
-		ChannelPicture    []ImageOption `json:"channel_picture"`
-		Websocket         struct {
+		AuthSignKey       string `json:"auth_sign_key"`
+		UploadSignKey     string `json:"upload_sign_key"`
+		ULIDConflictRetry int    `json:"ulid_conflict_retry"`
+		Storages          struct {
+			Video storageConfig `json:"video"`
+			Image storageConfig `json:"image"`
+		} `json:"storages"`
+		Thumbnail      ImageOption   `json:"thumbnail"`
+		UserPicture    []ImageOption `json:"user_picture"`
+		ChannelPicture []ImageOption `json:"channel_picture"`
+		Websocket      struct {
 			Enabled      bool `json:"enabled"`
 			PingInterval int  `json:"ping_interval"`
 			PongTimeout  int  `json:"pong_timeout"`
 		} `json:"websocket"`
 		SubscriptionBonus int64 `json:"subscription_bonus"`
 	}
-	db *sqlx.DB
-	es *elastic.Client
-	ws *ezsock.Server
+	db           *sqlx.DB
+	es           *elastic.Client
+	ws           *ezsock.Server
+	videoStorage storage
+	imageStorage storage
 }
 
 func NewApp() *App {
@@ -172,6 +177,18 @@ func NewApp() *App {
 	}
 
 	app.es = es
+
+	app.videoStorage, err = createStorage(&app.Config.Storages.Video)
+	if err != nil {
+		fmt.Println(err)
+		panic("Can not create video storage")
+	}
+
+	app.imageStorage, err = createStorage(&app.Config.Storages.Image)
+	if err != nil {
+		fmt.Println(err)
+		panic("Can not create image storage")
+	}
 
 	return app
 }

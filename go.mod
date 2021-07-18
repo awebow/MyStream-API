@@ -4,6 +4,9 @@ go 1.15
 
 require (
 	github.com/awebow/ezsock v0.1.0
+	github.com/aws/aws-sdk-go-v2 v1.7.1
+	github.com/aws/aws-sdk-go-v2/config v1.5.0
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.11.1
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/disintegration/imaging v1.6.2
 	github.com/go-playground/locales v0.13.0

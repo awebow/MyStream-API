@@ -298,7 +298,7 @@ func (app *App) PutUserPicture(c echo.Context) error {
 	entropy := ulid.Monotonic(rand.New(rand.NewSource(now.UnixNano())), 0)
 	fileName := "u" + userID + ulid.MustNew(ulid.Timestamp(now), entropy).String()
 
-	if err = app.StoreFile(dir, "images/"+fileName); err != nil {
+	if err = app.imageStorage.storeFile(dir, fileName); err != nil {
 		return err
 	}
 

@@ -515,7 +515,7 @@ func (app *App) PutThumbnail(c echo.Context) error {
 		return err
 	}
 
-	if err = app.StoreFile(temp.Name(), "videos/"+videoID+"/thumbnail.jpg"); err != nil {
+	if err = app.videoStorage.storeFile(temp.Name(), videoID+"/thumbnail.jpg"); err != nil {
 		return err
 	}
 

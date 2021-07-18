@@ -98,7 +98,7 @@ func main() {
 
 type App struct {
 	Config struct {
-		Listen   string `json:"listen"`
+		Listen   string `json:"listen,omitempty"`
 		Database struct {
 			Host     string `json:"host"`
 			User     string `json:"user"`
@@ -145,6 +145,10 @@ func NewApp() *App {
 
 	data, _ := ioutil.ReadFile("config.json")
 	json.Unmarshal(data, &app.Config)
+
+	if app.Config.Listen == "" {
+		app.Config.Listen = ":80"
+	}
 
 	db, err := sqlx.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s)/%s?parseTime=true",
 		app.Config.Database.User,

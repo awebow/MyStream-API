@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io/ioutil"
-	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
@@ -244,47 +243,34 @@ func (app *App) PostChannel(c echo.Context) error {
 		}
 	}
 
-	sql := "INSERT INTO channels " +
+	now := time.Now()
+	id := ulid.MustNew(ulid.Timestamp(now), app.ulidEntropy)
+
+	query := "INSERT INTO channels " +
 		"(`id`, `name`, `description`, `owner`, `created_at`, `updated_at`) VALUES (?, ?, ?, ?, ?, ?)"
-	stmt, err := tx.Prepare(sql)
+	_, err = tx.Exec(query, id.String(), body.Name, body.Description, userId, now, now)
+
 	if err != nil {
+		tx.Rollback()
 		return err
 	}
-	defer stmt.Close()
 
-	var id ulid.ULID
-	now := time.Now()
-	entropy := ulid.Monotonic(rand.New(rand.NewSource(now.UnixNano())), 0)
-	inserted := false
-	for i := 0; i < app.Config.ULIDConflictRetry+1; i++ {
-		id = ulid.MustNew(ulid.Timestamp(now), entropy)
+	_, err = app.es.Index().
+		Index(app.Config.Elasticsearch.ChannelIndex).
+		Id(id.String()).
+		BodyJson(echo.Map{
+			"name":        body.Name,
+			"description": body.Description,
+			"updated_at":  now,
+		}).
+		Do(context.Background())
 
-		_, err = stmt.Exec(id.String(), body.Name, body.Description, userId, now, now)
-
-		if err == nil {
-			inserted = true
-			break
+	if err == nil {
+		if err = tx.Commit(); err != nil {
+			return err
 		}
-	}
 
-	if inserted {
-		_, err = app.es.Index().
-			Index(app.Config.Elasticsearch.ChannelIndex).
-			Id(id.String()).
-			BodyJson(echo.Map{
-				"name":        body.Name,
-				"description": body.Description,
-				"updated_at":  now,
-			}).
-			Do(context.Background())
-
-		if err == nil {
-			if err = tx.Commit(); err != nil {
-				return err
-			}
-
-			return c.JSON(http.StatusOK, echo.Map{"id": id})
-		}
+		return c.JSON(http.StatusOK, echo.Map{"id": id})
 	}
 
 	tx.Rollback()
@@ -338,8 +324,7 @@ func (app *App) PutChannelPicture(c echo.Context) error {
 	}
 
 	now := time.Now()
-	entropy := ulid.Monotonic(rand.New(rand.NewSource(now.UnixNano())), 0)
-	fileName := "c" + channelID + ulid.MustNew(ulid.Timestamp(now), entropy).String()
+	fileName := "c" + channelID + ulid.MustNew(ulid.Timestamp(now), app.ulidEntropy).String()
 
 	if err = app.imageStorage.storeFile(dir, fileName); err != nil {
 		return err

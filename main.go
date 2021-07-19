@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"time"
 
 	"github.com/awebow/ezsock"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/oklog/ulid/v2"
 	"github.com/olivere/elastic/v7"
 )
 
@@ -115,11 +117,10 @@ type App struct {
 			VideoIndex   string `json:"video_index"`
 			ChannelIndex string `json:"channel_index"`
 		}
-		AllowUserChannel  bool   `json:"allow_user_channel"`
-		AuthSignKey       string `json:"auth_sign_key"`
-		UploadSignKey     string `json:"upload_sign_key"`
-		ULIDConflictRetry int    `json:"ulid_conflict_retry"`
-		Storages          struct {
+		AllowUserChannel bool   `json:"allow_user_channel"`
+		AuthSignKey      string `json:"auth_sign_key"`
+		UploadSignKey    string `json:"upload_sign_key"`
+		Storages         struct {
 			Video storageConfig `json:"video"`
 			Image storageConfig `json:"image"`
 		} `json:"storages"`
@@ -138,6 +139,7 @@ type App struct {
 	ws           *ezsock.Server
 	videoStorage storage
 	imageStorage storage
+	ulidEntropy  ulid.MonotonicReader
 }
 
 func NewApp() *App {
@@ -194,6 +196,8 @@ func NewApp() *App {
 		fmt.Println(err)
 		panic("Can not create image storage")
 	}
+
+	app.ulidEntropy = NewSyncMonotonicReader(time.Now().UnixNano())
 
 	return app
 }

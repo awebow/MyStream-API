@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io/ioutil"
-	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
@@ -194,9 +193,7 @@ func (app *App) PostUser(c echo.Context) error {
 	}
 
 	now := time.Now()
-	entropy := ulid.Monotonic(rand.New(rand.NewSource(now.UnixNano())), 0)
 
-	var id ulid.ULID
 	tx, err := app.db.Beginx()
 	if err != nil {
 		return err
@@ -220,35 +217,15 @@ func (app *App) PostUser(c echo.Context) error {
 		}
 	}
 
-	stmt, err := tx.Prepare("UPDATE users SET `id`=? WHERE `email`=?")
+	id := ulid.MustNew(ulid.Timestamp(now), app.ulidEntropy)
+	_, err = tx.Exec("UPDATE users SET `id`=? WHERE `email`=?", id.String(), body.Email)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 
-	for i := 0; i < app.Config.ULIDConflictRetry+1; i++ {
-		id = ulid.MustNew(ulid.Timestamp(now), entropy)
-
-		_, err = stmt.Exec(id.String(), body.Email)
-
-		if err == nil {
-			break
-		}
-	}
-
-	if err != nil {
-		stmt.Close()
-		tx.Rollback()
-		return err
-	}
-
-	if err = stmt.Close(); err == nil {
-		tx.Commit()
-		return c.JSON(http.StatusOK, echo.Map{"id": id})
-	} else {
-		tx.Rollback()
-		return err
-	}
+	tx.Commit()
+	return c.JSON(http.StatusOK, echo.Map{"id": id})
 }
 
 func (app *App) PutUserPicture(c echo.Context) error {
@@ -295,8 +272,7 @@ func (app *App) PutUserPicture(c echo.Context) error {
 	}
 
 	now := time.Now()
-	entropy := ulid.Monotonic(rand.New(rand.NewSource(now.UnixNano())), 0)
-	fileName := "u" + userID + ulid.MustNew(ulid.Timestamp(now), entropy).String()
+	fileName := "u" + userID + ulid.MustNew(ulid.Timestamp(now), app.ulidEntropy).String()
 
 	if err = app.imageStorage.storeFile(dir, fileName); err != nil {
 		return err

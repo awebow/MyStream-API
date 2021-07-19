@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
@@ -312,46 +311,32 @@ func (app *App) PostVideo(c echo.Context) error {
 		return err
 	}
 
-	if err := app.CheckChannelAuth(body.ChannelID, GetUserID(c)); err != nil {
+	userId := GetUserID(c)
+	if err := app.CheckChannelAuth(body.ChannelID, userId); err != nil {
 		return err
 	}
 
-	sql := "INSERT INTO videos (`id`, `channel_id`, `title`, `description`, `post_started_at`) " +
+	now := time.Now()
+	id := ulid.MustNew(ulid.Timestamp(now), app.ulidEntropy)
+
+	query := "INSERT INTO videos (`id`, `channel_id`, `title`, `description`, `post_started_at`) " +
 		"VALUES (?, ?, ?, ?, ?)"
-	stmt, err := app.db.Prepare(sql)
+	_, err := app.db.Exec(query, id.String(), body.ChannelID, body.Title, body.Description, now)
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
 
-	var id ulid.ULID
-	now := time.Now()
-	entropy := ulid.Monotonic(rand.New(rand.NewSource(now.UnixNano())), 0)
-	for i := 0; i < app.Config.ULIDConflictRetry+1; i++ {
-		id = ulid.MustNew(ulid.Timestamp(now), entropy)
-
-		_, err = stmt.Exec(id.String(), body.ChannelID, body.Title, body.Description, now)
-
-		if err == nil {
-			break
-		}
-	}
-
-	if err == nil {
-		token := jwt.New()
-		token.Set("video_id", id)
-		signed, err := jwt.Sign(token, jwa.HS256, []byte(app.Config.UploadSignKey))
-		if err != nil {
-			return err
-		}
-
-		return c.JSON(http.StatusOK, &struct {
-			ID    string `json:"id"`
-			Token string `json:"token"`
-		}{id.String(), string(signed)})
-	} else {
+	token := jwt.New()
+	token.Set("video_id", id)
+	signed, err := jwt.Sign(token, jwa.HS256, []byte(app.Config.UploadSignKey))
+	if err != nil {
 		return err
 	}
+
+	return c.JSON(http.StatusOK, &struct {
+		ID    string `json:"id"`
+		Token string `json:"token"`
+	}{id.String(), string(signed)})
 }
 
 func (app *App) PutVideo(c echo.Context) error {
@@ -832,30 +817,15 @@ func (app *App) PostComment(c echo.Context) error {
 		return err
 	}
 
-	stmt, err := app.db.Prepare(
-		"INSERT INTO comments (`id`, `video_id`, `content`, `writer_id`, `posted_at`) " +
-			"SELECT ?, v.`id`, ?, ?, ? FROM videos v JOIN channels c ON c.`id`=v.`channel_id` " +
-			"WHERE v.`id`=? AND (v.`status`='ACTIVE' OR (v.`status`='ENCODING' AND c.`owner`=?))",
-	)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
+	query := "INSERT INTO comments (`id`, `video_id`, `content`, `writer_id`, `posted_at`) " +
+		"SELECT ?, v.`id`, ?, ?, ? FROM videos v JOIN channels c ON c.`id`=v.`channel_id` " +
+		"WHERE v.`id`=? AND (v.`status`='ACTIVE' OR (v.`status`='ENCODING' AND c.`owner`=?))"
+
+	now := time.Now()
+	id := ulid.MustNew(ulid.Timestamp(now), app.ulidEntropy)
 
 	userId := GetUserID(c)
-	var id ulid.ULID
-	now := time.Now()
-	entropy := ulid.Monotonic(rand.New(rand.NewSource(now.UnixNano())), 0)
-	var res sql.Result
-	for i := 0; i < app.Config.ULIDConflictRetry+1; i++ {
-		id = ulid.MustNew(ulid.Timestamp(now), entropy)
-
-		res, err = stmt.Exec(id.String(), body.Content, userId, now, body.VideoID, userId)
-
-		if err == nil {
-			break
-		}
-	}
+	res, err := app.db.Exec(query, id.String(), body.Content, userId, now, body.VideoID, userId)
 	if err != nil {
 		return err
 	}

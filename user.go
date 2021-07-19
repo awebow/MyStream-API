@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
@@ -104,12 +105,12 @@ func (app *App) PutMe(c echo.Context) error {
 			return err
 		}
 
-		if !bytes.Equal(currentPassword, hashPassword(email, *body.CurrentPassword)) {
+		if verifyPassword(*body.CurrentPassword, currentPassword) {
 			return echo.NewHTTPError(http.StatusUnauthorized, "wrong current password")
 		}
 
-		hashed := hashPassword(email, *body.Password)
-		password = &hashed
+		salted := hashPassword(*body.Password)
+		password = &salted
 	}
 
 	sql := "UPDATE users SET `password`=IFNULL(?, `password`), `name`=IFNULL(?, `name`)" +
@@ -202,7 +203,7 @@ func (app *App) PostUser(c echo.Context) error {
 	_, err = tx.Exec("INSERT INTO users (`id`, `email`, `password`, `name`, `registered_at`) VALUES (?, ?, ?, ?, ?)",
 		body.Email,
 		body.Email,
-		hashPassword(body.Email, body.Password),
+		hashPassword(body.Password),
 		body.Name,
 		now,
 	)
@@ -304,13 +305,15 @@ func (app *App) PostToken(c echo.Context) error {
 	}
 
 	var id string
+	var salted []byte
 
-	query := "SELECT `id` FROM users WHERE `email`=? AND `password`=?"
-	err := app.db.Get(&id, query, body.Email, hashPassword(body.Email, body.Password))
-	if err == sql.ErrNoRows {
+	query := "SELECT `id`, `password` FROM users WHERE `email`=?"
+	if err := app.db.QueryRow(query, body.Email).Scan(&id, &salted); err == sql.ErrNoRows {
 		return echo.ErrUnauthorized
 	} else if err != nil {
 		return err
+	} else if !verifyPassword(body.Password, salted) {
+		return echo.ErrUnauthorized
 	}
 
 	token := jwt.New()
@@ -353,9 +356,20 @@ func (app *App) AuthUserMiddleware(allowUnauth bool) echo.MiddlewareFunc {
 	}
 }
 
-func hashPassword(email string, password string) []byte {
-	hashed := sha3.Sum256([]byte(email + password))
-	return hashed[:]
+func hashPassword(password string) []byte {
+	salt := make([]byte, 16)
+	rand.New(rand.NewSource(time.Now().UnixNano())).Read(salt)
+
+	hashed := sha3.Sum256(append(salt, []byte(password)...))
+	return append(salt, hashed[:]...)
+}
+
+func verifyPassword(password string, salted []byte) bool {
+	salt := make([]byte, 16)
+	copy(salt, salted[:16])
+	hashed := sha3.Sum256(append(salt, []byte(password)...))
+
+	return bytes.Equal(hashed[:], salted[16:])
 }
 
 func GetUserID(c echo.Context) (id string) {

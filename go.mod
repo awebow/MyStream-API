@@ -26,6 +26,7 @@ require (
 	github.com/oklog/ulid/v2 v2.0.2
 	github.com/olivere/elastic/v7 v7.0.24
 	github.com/onsi/gomega v1.12.0 // indirect
+	github.com/stretchr/testify v1.7.0 // indirect
 	go.opentelemetry.io/otel v0.20.0 // indirect
 	golang.org/x/crypto v0.0.0-20210506145944-38f3c27a63bf
 	golang.org/x/image v0.0.0-20210504121937-7319ad40d33e // indirect

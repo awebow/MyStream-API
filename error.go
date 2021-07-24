@@ -85,6 +85,8 @@ func InitValidTrans(e *echo.Echo) {
 func (app *App) ErrorHandler(err error, c echo.Context) {
 	if v, ok := err.(*json.UnmarshalTypeError); ok {
 		err = echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("type error on field '%s'", v.Field))
+	} else if _, ok := err.(*echo.HTTPError); !ok {
+		fmt.Println(err)
 	}
 
 	c.Echo().DefaultHTTPErrorHandler(err, c)

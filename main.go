@@ -20,6 +20,9 @@ func main() {
 	app := NewApp()
 
 	e := echo.New()
+	e.HideBanner = true
+	e.HidePort = true
+
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowMethods: []string{
 			http.MethodGet,
@@ -95,6 +98,7 @@ func main() {
 		e.GET("/ws", app.ServeWebsocket)
 	}
 
+	fmt.Println("MyStream API started on " + app.Config.Listen)
 	e.Logger.Fatal(e.Start(app.Config.Listen))
 }
 

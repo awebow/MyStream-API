@@ -3,7 +3,7 @@ module github.com/awebow/MyStream-API
 go 1.15
 
 require (
-	github.com/awebow/ezsock v0.1.0
+	github.com/awebow/ezsock v0.1.1
 	github.com/aws/aws-sdk-go-v2 v1.7.1
 	github.com/aws/aws-sdk-go-v2/config v1.5.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.11.1
@@ -21,12 +21,11 @@ require (
 	github.com/lestrrat-go/backoff/v2 v2.0.8 // indirect
 	github.com/lestrrat-go/jwx v1.2.0
 	github.com/lib/pq v1.10.1 // indirect
-	github.com/mattn/go-colorable v0.1.8 // indirect
 	github.com/mattn/go-sqlite3 v1.14.7 // indirect
 	github.com/oklog/ulid/v2 v2.0.2
 	github.com/olivere/elastic/v7 v7.0.24
 	github.com/onsi/gomega v1.12.0 // indirect
-	github.com/stretchr/testify v1.7.0 // indirect
+	github.com/stretchr/testify v1.7.0
 	go.opentelemetry.io/otel v0.20.0 // indirect
 	golang.org/x/crypto v0.0.0-20210506145944-38f3c27a63bf
 	golang.org/x/image v0.0.0-20210504121937-7319ad40d33e // indirect

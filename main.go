@@ -78,6 +78,7 @@ func main() {
 	e.POST("/channels/:id/subscriptions", app.PostSubscription, userAuth)
 	e.DELETE("/channels/:id/subscriptions", app.DeleteSubscription, userAuth)
 	e.POST("/videos", app.PostVideo, userAuth)
+	e.DELETE("/videos/:id", app.DeleteVideo, userAuth)
 	e.PUT("/videos/:id/thumbnail", app.PutThumbnail, userAuth)
 	e.GET("/videos/:id/expressions", app.GetExpression, allowUnauth)
 	e.PUT("/videos/:id/expressions", app.PutExpression, userAuth)

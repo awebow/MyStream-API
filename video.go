@@ -277,10 +277,10 @@ func (app *App) GetVideos(c echo.Context) error {
 			}
 		} else {
 			if pageToken != "" {
-				query := "SELECT * FROM videos WHERE `id` < ? ORDER BY `id` DESC LIMIT ?"
+				query := "SELECT * FROM videos WHERE `id` < ? AND `status`='ACTIVE' ORDER BY `id` DESC LIMIT ?"
 				err = app.db.Unsafe().Select(&response.Data, query, pageToken, limit+1)
 			} else {
-				query := "SELECT * FROM videos ORDER BY `id` DESC LIMIT ?"
+				query := "SELECT * FROM videos WHERE `status`='ACTIVE' ORDER BY `id` DESC LIMIT ?"
 				err = app.db.Unsafe().Select(&response.Data, query, limit+1)
 			}
 
@@ -399,6 +399,12 @@ func (app *App) PutVideo(c echo.Context) error {
 		}
 
 		if body.Status != nil {
+			if *body.Status == StatusInactive {
+				return echo.NewHTTPError(http.StatusBadRequest,
+					"field 'status' should be 'ACTIVE' OR 'ENCODING'. "+
+						"use DELETE /videos/:id if you want to set it 'INACTIVE'")
+			}
+
 			params = append(params, "`status`=?")
 			vals = append(vals, *body.Status)
 		}
@@ -449,6 +455,35 @@ func (app *App) PutVideo(c echo.Context) error {
 	} else {
 		return err
 	}
+}
+
+func (app *App) DeleteVideo(c echo.Context) error {
+	videoID := c.Param("id")
+	var ownerID string
+
+	query := `SELECT c.owner FROM videos v JOIN channels c ON v.channel_id=c.id
+			  WHERE v.id=? AND v.status='ACTIVE'`
+	if err := app.db.Get(&ownerID, query, videoID); err == sql.ErrNoRows {
+		return NotFoundError("video")
+	} else if err != nil {
+		return err
+	}
+
+	if ownerID != GetUserID(c) {
+		return echo.NewHTTPError(http.StatusUnauthorized, "you don't have permission to delete this video")
+	}
+
+	query = "UPDATE videos SET `status`='INACTIVE', `deactivated_at`=CURRENT_TIMESTAMP() WHERE `id`=?"
+	if _, err := app.db.Exec(query, videoID); err != nil {
+		return err
+	}
+
+	app.es.Delete().
+		Index(app.Config.Elasticsearch.VideoIndex).
+		Id(videoID).
+		Do(context.Background())
+
+	return c.NoContent(http.StatusNoContent)
 }
 
 func (app *App) PutThumbnail(c echo.Context) error {

@@ -344,26 +344,46 @@ func (app *App) PutChannelPicture(c echo.Context) error {
 }
 
 func (app *App) GetChannelVideos(c echo.Context) error {
+	response := struct {
+		Pagination *string `json:"pagination"`
+		Data       []Video `json:"data"`
+	}{Data: []Video{}}
+
 	channelID := c.Param("id")
 
-	sql := "SELECT * FROM videos WHERE `channel_id`=? AND `status`='ACTIVE'"
-	rows, err := app.db.Unsafe().Queryx(sql, channelID)
+	pageToken := c.QueryParam("pagination")
+	limit := 20
+
+	var err error
+	if q := c.QueryParam("limit"); q != "" {
+		limit, err = strconv.Atoi(q)
+		if err != nil {
+			return err
+		}
+	}
+
+	if limit < 1 || limit > 100 {
+		return echo.NewHTTPError(http.StatusBadRequest, "value of 'limit' has to be 1~100")
+	}
+
+	if pageToken == "" {
+		query := "SELECT * FROM videos WHERE `channel_id`=? AND `status`='ACTIVE' ORDER BY `id` DESC LIMIT ?"
+		err = app.db.Unsafe().Select(&response.Data, query, channelID, limit+1)
+	} else {
+		query := "SELECT * FROM videos WHERE `channel_id`=? AND `id` < ? AND `status`='ACTIVE' ORDER BY `id` DESC LIMIT ?"
+		err = app.db.Unsafe().Select(&response.Data, query, channelID, pageToken, limit+1)
+	}
+
 	if err != nil {
 		return err
 	}
 
-	videos := []Video{}
-	for rows.Next() {
-		v := Video{}
-		err = rows.StructScan(&v)
-		if err != nil {
-			return err
-		}
-
-		videos = append(videos, v)
+	if len(response.Data) > limit {
+		response.Pagination = &response.Data[limit-1].ID
+		response.Data = response.Data[:limit]
 	}
 
-	return c.JSON(http.StatusOK, videos)
+	return c.JSON(http.StatusOK, response)
 }
 
 func (app *App) GetSubscription(c echo.Context) error {

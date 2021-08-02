@@ -184,7 +184,7 @@ func NewApp() *App {
 
 	es, err := elastic.NewClient(elastic.SetURL(app.Config.Elasticsearch.URL))
 	if err != nil {
-		fmt.Println(app.Config.Elasticsearch.URL)
+		fmt.Println(err)
 		panic("Can not create Elasticsearch client")
 	}
 

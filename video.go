@@ -93,6 +93,9 @@ type Video struct {
 	ChannelID     string      `json:"channel_id" db:"channel_id"`
 	Title         string      `json:"title" db:"title"`
 	Description   string      `json:"description" db:"description"`
+	Width         int         `json:"width" db:"width"`
+	Height        int         `json:"height" db:"height"`
+	FrameRate     int         `json:"frame_rate" db:"frame_rate"`
 	Duration      float32     `json:"duration" db:"duration"`
 	Status        VideoStatus `json:"status" db:"status"`
 	Likes         uint64      `json:"likes" db:"likes"`
@@ -344,6 +347,9 @@ func (app *App) PutVideo(c echo.Context) error {
 	body := struct {
 		Title       *string      `json:"title"`
 		Description *string      `json:"description"`
+		Width       *int         `json:"width"`
+		Height      *int         `json:"height"`
+		FrameRate   *int         `json:"frame_rate"`
 		Duration    *float32     `json:"duration"`
 		Status      *VideoStatus `json:"status"`
 		PostedAt    *time.Time   `json:"posted_at"`
@@ -393,6 +399,21 @@ func (app *App) PutVideo(c echo.Context) error {
 	}
 
 	if editMeta {
+		if body.Width != nil {
+			params = append(params, "`width`=?")
+			vals = append(vals, *body.Width)
+		}
+
+		if body.Height != nil {
+			params = append(params, "`height`=?")
+			vals = append(vals, *body.Height)
+		}
+
+		if body.FrameRate != nil {
+			params = append(params, "`frame_rate`=?")
+			vals = append(vals, *body.FrameRate)
+		}
+
 		if body.Duration != nil {
 			params = append(params, "`duration`=?")
 			vals = append(vals, *body.Duration)

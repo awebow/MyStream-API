@@ -105,7 +105,7 @@ func (app *App) PutMe(c echo.Context) error {
 			return err
 		}
 
-		if verifyPassword(*body.CurrentPassword, currentPassword) {
+		if !verifyPassword(*body.CurrentPassword, currentPassword) {
 			return echo.NewHTTPError(http.StatusUnauthorized, "wrong current password")
 		}
 

@@ -201,7 +201,8 @@ func (app *App) GetSubscribedChannels(c echo.Context) error {
 }
 
 func (app *App) GetChannelPermission(c echo.Context) error {
-	rows, err := app.db.Query("SELECT 1 FROM channels WHERE `owner`=?", GetUserID(c))
+	query := "SELECT 1 FROM channels WHERE `id`=? AND `owner`=?"
+	rows, err := app.db.Query(query, c.Param("id"), GetUserID(c))
 	if err != nil {
 		return err
 	}

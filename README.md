@@ -7,11 +7,11 @@ MyStream은 MySQL 혹은 MariaDB를 사용합니다. 다음 SQL문을 실행하�
 
 ```sql
 CREATE TABLE `users` (
-  `id` char(26) NOT NULL,
-  `email` varchar(255) NOT NULL,
+  `id` char(26) CHARACTER NOT NULL,
+  `email` varchar(255) CHARACTER NOT NULL,
   `password` binary(48) NOT NULL,
-  `name` varchar(64) NOT NULL,
-  `picture` varchar(255) DEFAULT NULL,
+  `name` varchar(64) CHARACTER NOT NULL,
+  `picture` varchar(255) CHARACTER DEFAULT NULL,
   `is_admin` tinyint(1) NOT NULL DEFAULT 0,
   `registered_at` datetime NOT NULL DEFAULT current_timestamp(),
   `deactivated_at` datetime DEFAULT NULL,
@@ -20,14 +20,14 @@ CREATE TABLE `users` (
   KEY `users_registered_at_IDX` (`registered_at`) USING BTREE,
   KEY `users_deactivated_at_IDX` (`deactivated_at`) USING BTREE,
   KEY `users_is_admin_IDX` (`is_admin`) USING BTREE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE `channels` (
-  `id` char(26) NOT NULL,
-  `name` varchar(100) NOT NULL,
-  `description` longtext DEFAULT NULL,
-  `picture` varchar(255) DEFAULT NULL,
-  `owner` char(26) NOT NULL,
+  `id` char(26) CHARACTER NOT NULL,
+  `name` varchar(100) CHARACTER NOT NULL,
+  `description` longtext CHARACTER DEFAULT NULL,
+  `picture` varchar(255) CHARACTER DEFAULT NULL,
+  `owner` char(26) CHARACTER NOT NULL,
   `subscribers` bigint(20) unsigned NOT NULL DEFAULT 0,
   `videos` bigint(20) unsigned NOT NULL DEFAULT 0,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
@@ -40,15 +40,27 @@ CREATE TABLE `channels` (
   KEY `channels_subscribers_IDX` (`subscribers`) USING BTREE,
   KEY `channels_videos_IDX` (`videos`) USING BTREE,
   CONSTRAINT `channels_FK` FOREIGN KEY (`owner`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE `subscriptions` (
+  `user_id` char(26) CHARACTER NOT NULL,
+  `channel_id` char(26) CHARACTER NOT NULL,
+  PRIMARY KEY (`user_id`,`channel_id`),
+  KEY `subscriptions_channel_FK` (`channel_id`),
+  CONSTRAINT `subscriptions_channel_FK` FOREIGN KEY (`channel_id`) REFERENCES `channels` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `subscriptions_user_FK` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE `videos` (
-  `id` char(26) NOT NULL,
-  `channel_id` char(26) DEFAULT NULL,
-  `title` varchar(100) NOT NULL,
-  `description` longtext NOT NULL DEFAULT '',
+  `id` char(26) CHARACTER NOT NULL,
+  `channel_id` char(26) CHARACTER DEFAULT NULL,
+  `title` varchar(100) CHARACTER NOT NULL,
+  `description` longtext CHARACTER NOT NULL DEFAULT '',
+  `width` int(11) NOT NULL DEFAULT 0,
+  `height` int(11) NOT NULL DEFAULT 0,
+  `frame_rate` int(11) NOT NULL DEFAULT 0,
   `duration` float NOT NULL DEFAULT 0,
-  `status` enum('ACTIVE','ENCODING','INACTIVE') NOT NULL DEFAULT 'ENCODING',
+  `status` enum('ACTIVE','ENCODING','INACTIVE') CHARACTER NOT NULL DEFAULT 'ENCODING',
   `likes` bigint(20) unsigned NOT NULL DEFAULT 0,
   `dislikes` bigint(20) unsigned NOT NULL DEFAULT 0,
   `post_started_at` datetime NOT NULL DEFAULT current_timestamp(),
@@ -62,13 +74,13 @@ CREATE TABLE `videos` (
   KEY `videos_deactivated_at_IDX` (`deactivated_at`) USING BTREE,
   KEY `videos_status_IDX` (`status`) USING BTREE,
   CONSTRAINT `videos_FK` FOREIGN KEY (`channel_id`) REFERENCES `channels` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE `comments` (
-  `id` char(26) NOT NULL,
-  `video_id` char(26) DEFAULT NULL,
-  `content` longtext NOT NULL,
-  `writer_id` char(26) DEFAULT NULL,
+  `id` char(26) CHARACTER NOT NULL,
+  `video_id` char(26) CHARACTER DEFAULT NULL,
+  `content` longtext CHARACTER NOT NULL,
+  `writer_id` char(26) CHARACTER DEFAULT NULL,
   `posted_at` datetime NOT NULL DEFAULT current_timestamp(),
   `deactivated_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -78,26 +90,17 @@ CREATE TABLE `comments` (
   KEY `comments_deactivated_at_IDX` (`deactivated_at`) USING BTREE,
   CONSTRAINT `comments_FK_video` FOREIGN KEY (`video_id`) REFERENCES `videos` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `comments_FK_writer` FOREIGN KEY (`writer_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE `expressions` (
-  `video_id` char(26) NOT NULL,
-  `user_id` char(26) NOT NULL,
-  `type` enum('LIKE','DISLIKE') NOT NULL,
+  `video_id` char(26) CHARACTER NOT NULL,
+  `user_id` char(26) CHARACTER NOT NULL,
+  `type` enum('LIKE','DISLIKE') CHARACTER NOT NULL,
   PRIMARY KEY (`video_id`,`user_id`),
   KEY `expressions_user_FK` (`user_id`),
   CONSTRAINT `expressions_user_FK` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `expressions_video_FK` FOREIGN KEY (`video_id`) REFERENCES `videos` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-CREATE TABLE `subscriptions` (
-  `user_id` char(26) NOT NULL,
-  `channel_id` char(26) NOT NULL,
-  PRIMARY KEY (`user_id`,`channel_id`),
-  KEY `subscriptions_channel_FK` (`channel_id`),
-  CONSTRAINT `subscriptions_channel_FK` FOREIGN KEY (`channel_id`) REFERENCES `channels` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
-  CONSTRAINT `subscriptions_user_FK` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
 ### Elasticsearch 셋업
@@ -126,7 +129,7 @@ PUT localhost:9200/videos
   "mappings": {
     "properties": {
       "updated_at": {
-        "type":   "date"
+        "type": "date"
       }
     }
   },
@@ -169,6 +172,7 @@ API 서버가 실행될 Working Directory에 설정 파일 `config.json`을 생�
 	},
 	"auth_sign_key": "adsa!cs231!sX@d",
 	"upload_sign_key": "da!cjxZX!&*dc31",
+  "allow_user_channel": true,
 	"storages": {
 		"video": {
 			"type": "s3",
@@ -235,6 +239,7 @@ API 서버가 실행될 Working Directory에 설정 파일 `config.json`을 생�
     * `channel_index` - 채널 문서를 저장할 인덱스 이름
 * `auth_sign_key` - 사용자 인증에 사용할 JWT sign key
 * `upload_sign_key` - 인코더에 영상 전송 시 사용할 JWT sign key
+* `allow_user_channel` - 사용자의 채널 생성 허용 여부
 * `storage` - 저장소 설정. 필수
     * `video` - 동영상 저장소, 필수
     * `image` - 이미지 저장소, 필수

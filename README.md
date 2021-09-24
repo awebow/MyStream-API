@@ -238,7 +238,7 @@ API 서버가 실행될 Working Directory에 설정 파일 `config.json`을 생�
     * `video_index` - 동영상 문서를 저장할 인덱스 이름
     * `channel_index` - 채널 문서를 저장할 인덱스 이름
 * `auth_sign_key` - 사용자 인증에 사용할 JWT sign key
-* `upload_sign_key` - 인코더에 영상 전송 시 사용할 JWT sign key
+* `upload_sign_key` - 인코더에 영상 전송 시 사용할 JWT sign key. MyStream Encoder 설정의 `upload_sign_key`와 동일해야합니다.
 * `allow_user_channel` - 사용자의 채널 생성 허용 여부
 * `storage` - 저장소 설정. 필수
     * `video` - 동영상 저장소, 필수
@@ -277,3 +277,32 @@ $ go run .
 
 ## API 문서
 API 명세 문서는 [위키](https://github.com/awebow/MyStream-API/wiki)를 참조해주세요.
+
+## Troubleshooting
+### Reverse Proxy 사용 시 WebSocket 연결이 되지 않는 경우
+`Nginx`나 `Apache` 등의 웹 서버 프로그램을 통해 MyStream Encoder에 Reverse Proxy를 적용하는 경우 `Upgrade`와 `Connection`를 원본 요청과 동일하게 전달해줘야합니다.
+
+다음은 `Nginx`를 사용하는 경우의 설정의 예입니다.
+```
+server {
+        listen 443 ssl;
+        server_name api.mystream.mshnet.xyz;
+        ssl_certificate /etc/letsencrypt/live/api.mystream.mshnet.xyz/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/api.mystream.mshnet.xyz/privkey.pem;
+        include /etc/letsencrypt/options-ssl-nginx.conf;
+        ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+        location / {
+                proxy_set_header Host $host;
+                proxy_pass http://127.0.0.1:8080;
+        }
+
+        location /ws {
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Host $host;
+                proxy_set_header Connection "Upgrade";
+                proxy_pass http://127.0.0.1:8080;
+        }
+
+}
+```

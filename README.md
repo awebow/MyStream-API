@@ -2,6 +2,12 @@
 MyStream은 JSON 형식의 REST API를 통해 데이터를 제공합니다.
 
 ## Getting Started
+### 설치
+GitHub의 [Release 페이지](https://github.com/awebow/MyStream-API/releases)에서 최신 릴리즈의 바이너리 혹은 소스 코드를 다운로드 받거나, 다음 명령어를 통해 저장소를 클론하여 최신 커밋의 소스 코드를 다운로드 받습니다.
+```console
+$ git clone https://github.com/awebow/MyStream-API
+```
+
 ### 데이터베이스 셋업
 MyStream은 MySQL 혹은 MariaDB를 사용합니다. 다음 SQL문을 실행하여 데이터베이스의 테이블을 생성합니다.
 
@@ -267,12 +273,18 @@ API 서버가 실행될 Working Directory에 설정 파일 `config.json`을 생�
 ### 실행
 API 서버의 컴파일된 바이너리를 통해 실행하는 경우 바이너리를 직접 실행합니다.
 ```console
-$ ./mystreamapi
+$ ./mystream-api
 ```
 
 또는 소스 코드로부터 즉석에서 컴파일하여 실행하려 하는 경우 다음 명령어를 통해 실행합니다. 이 경우 [Go](https://golang.org/dl/)가 설치되어 있어야 합니다.
 ```console
 $ go run .
+```
+
+### 빌드
+소스 코드를 빌드하여 바이너리를 생성하려면 다음 명령어를 실행합니다.
+```console
+$ go build
 ```
 
 ## API 문서

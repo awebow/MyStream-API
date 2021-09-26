@@ -270,6 +270,22 @@ API 서버가 실행될 Working Directory에 설정 파일 `config.json`을 생�
     * `enabled` - 활성화 여부. `true`로 설정한 노드들만 WebSocket 서버로 사용해야 합니다.
 * `subscription_bonus` - 구독 영상 우선순위 가산점. 추천 영상에서 구독한 채널의 영상은 입력한 시간(초)만큼 더 최신의 영상과 동일한 우선순위로 표시됩니다.
 
+### AWS 저장소 설정
+동영상 혹은 이미지 저장소로 AWS S3를 사용하는 경우, aws 디렉토리의 `config`, `credential` 파일에 AWS 설정을 작성해야합니다. 다음 예를 참고하세요.
+
+**config**
+```ini
+[default]
+region = ap-northeast-2
+```
+
+**credential**
+```ini
+[default]
+aws_access_key_id = [계정 Access Key]
+aws_secret_access_key = [계정 Secret Key]
+```
+
 ### 실행
 API 서버의 컴파일된 바이너리를 통해 실행하는 경우 바이너리를 직접 실행합니다.
 ```console
